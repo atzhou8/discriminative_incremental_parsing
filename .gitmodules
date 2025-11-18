@@ -1,0 +1,3 @@
+[submodule "data/treebanks/UD_English-GUM"]
+	path = data/treebanks/UD_English-GUM
+	url = https://github.com/UniversalDependencies/UD_English-GUM
