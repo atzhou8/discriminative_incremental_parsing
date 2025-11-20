@@ -41,29 +41,35 @@ class Parser(pl.LightningModule):
         optimizer = torch.optim.Adam(self.parameters(), lr=self.lr)
         return optimizer
 
-    def forward(self, sentences, lengths):
-        potentials = self.get_potentials(sentences, max(lengths))
-        # mt doesn't count root in length
-        mt = MatrixTree(scores=potentials, lens=lengths-1)
-        return mt
-    
     def predict(self, sentences, lengths):
         with torch.no_grad():
-            mt = self.forward(sentences, lengths)
+            edge_scores = self.forward(sentences, lengths)
+            mt = MatrixTree(scores=edge_scores, lens=lengths-1)
             best_trees = mst(mt.scores.detach().clone(), mt.mask) # type: ignore
 
             return best_trees
 
     def training_step(self, batch, batch_idx):
         sentences, gold_trees, lengths = batch
-        mt = self.forward(sentences, lengths)
-        log_probs = mt.log_prob(gold_trees).sum().double()
+        edge_scores = self.forward(sentences, lengths)
+        
+        # clamp for stability
+        edge_scores_clipped = edge_scores.clamp(
+            min=-self.score_clamp, 
+            max=self.score_clamp
+        )
+        mt = MatrixTree(scores=edge_scores_clipped, lens=lengths-1)
+        
+        # regularize loss via param norm and clip loss
+        log_probs = mt.log_prob(gold_trees).double().sum()
         param_norm = sum(p.norm()**2 for p in self.parameters())
-        loss = -self.prob_reg * log_probs + param_norm
+        weight_diff = torch.abs(edge_scores_clipped - edge_scores)
+        weight_loss = weight_diff[torch.isfinite(weight_diff)].sum()
+        loss = -self.prob_reg * log_probs + param_norm + weight_loss
         self.log('Train loss', loss, prog_bar=True)
         return loss
 
-    def get_potentials(self, sentences, max_len):
+    def forward(self, sentences, lengths):
         """Get score for edge (i, j) as: 
                 (w_score.T @ ReLU(W_head @ h_i + W_dep @ h_j))
 
@@ -74,7 +80,7 @@ class Parser(pl.LightningModule):
         with torch.no_grad():
             embeddings = self.embedding_model.get_representations(
                 sentences,
-                max_len
+                max(lengths)
             )
 
         head_weights = einsum(self.W_head, embeddings, 'd k, b n d -> b n k')
@@ -88,13 +94,17 @@ class Parser(pl.LightningModule):
         # Score 
         edge_weights = torch.relu(edge_weights) 
         edge_scores = einsum(self.w_score, edge_weights, 'k, b n m k -> b n m')
-        
+
         # Mask out self-connections (null nodes handled by supar)
         self_arc_mask = torch.eye(edge_scores.size(1)).bool().unsqueeze(0)
         edge_scores = edge_scores.masked_fill(
             self_arc_mask, 
             float('-inf')
         )
-        # clamp for MTT stability
-        return edge_scores.clamp(min=-self.score_clamp, max=self.score_clamp)
+
+        # Shift columns for stability
+        column_max = torch.max(edge_scores, dim=-1, keepdim=True)[0]
+        edge_scores = edge_scores - column_max
+
+        return edge_scores
     

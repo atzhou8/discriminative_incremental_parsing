@@ -72,13 +72,13 @@ if __name__ == '__main__':
         max_epochs=args.epochs,
         logger=logger,
         callbacks=[
-            ModelCheckpoint(
-                monitor='Validation loss',
-                mode='min',
-                save_top_k=3,
-                save_last=True,
-            ),
-            EarlyStopping(monitor='Validation loss', mode='min', patience=args.patience)
+            # ModelCheckpoint(
+            #     monitor='Validation loss',
+            #     mode='min',
+            #     save_top_k=3,
+            #     save_last=True,
+            # ),
+            # EarlyStopping(monitor='Validation loss', mode='min', patience=args.patience)
         ],
     )
 
