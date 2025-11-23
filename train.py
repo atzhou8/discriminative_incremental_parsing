@@ -1,29 +1,33 @@
-import os.path
-import string
+import os
+import platform
+import multiprocessing
 import argparse
+from pathlib import Path
 
+import torch
 from pytorch_lightning import Trainer
 from pytorch_lightning.loggers import TensorBoardLogger
 from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint
-
 from torch.utils.data import DataLoader
 
 from model.dataset import ParsingDataset, parsing_collater
 from model.parser import Parser
 from model.utils import tensors_to_conllu
 
-import os
+torch.set_float32_matmul_precision("medium")
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-en_train = '.\\data\\treebanks\\UD_English-GUM\\en_gum-ud-train.conllu'
-en_test = '.\\data\\treebanks\\UD_English-GUM\\en_gum-ud-test.conllu'
-en_dev = '.\\data\\treebanks\\UD_English-GUM\\en_gum-ud-dev.conllu'
+ROOT = Path(__file__).resolve().parent
+en_train = ROOT / "data" / "treebanks" / "UD_English-GUM" / "en_gum-ud-train.conllu"
+en_test = ROOT / "data" / "treebanks" / "UD_English-GUM" / "en_gum-ud-test.conllu"
+en_dev = ROOT / "data" / "treebanks" / "UD_English-GUM" / "en_gum-ud-dev.conllu"
 en_llm = 'goldfish-models/eng_latn_1000mb'
 
 parser = argparse.ArgumentParser()
 parser.add_argument('name')
 parser.add_argument('-train', '--train_dir',
                     default=en_train)
-parser.add_argument('-dev', '--dev_dir',
+parser.add_argument('-val', '--val_dir',
                     default=en_dev)
 parser.add_argument('-test', '--test_dir',
                     default=en_test)
@@ -34,6 +38,17 @@ parser.add_argument('-lr', '--learning_rate', type=float, default=5e-5)
 parser.add_argument('-n', '--epochs', type=int, default=500)
 parser.add_argument('-p', '--patience', type=int, default=50)
 
+def build_loader(dataset, shuffle):
+    return DataLoader(
+        dataset,
+        batch_size=args.batch_size,
+        shuffle=shuffle,
+        collate_fn=parsing_collater,
+        num_workers=0 if platform.system() == "Windows" else multiprocessing.cpu_count(),
+        pin_memory=device.type == "cuda",
+        persistent_workers=False,
+    )
+
 
 if __name__ == '__main__':
     args = parser.parse_args()
@@ -41,26 +56,11 @@ if __name__ == '__main__':
     model = Parser(args.embedding_model)
     train_set = ParsingDataset(args.train_dir)
     test_set = ParsingDataset(args.test_dir)
-    dev_dir = ParsingDataset(args.dev_dir)
+    val_set = ParsingDataset(args.val_dir)
 
-    train_loader = DataLoader(
-        train_set, 
-        batch_size=args.batch_size, 
-        shuffle=True,
-        collate_fn=parsing_collater
-    )
-    test_loader = DataLoader(
-        train_set, 
-        batch_size=args.batch_size, 
-        shuffle=True,
-        collate_fn=parsing_collater
-    )
-    dev_loader = DataLoader(
-        train_set, 
-        batch_size=args.batch_size, 
-        shuffle=True,
-        collate_fn=parsing_collater
-    )
+    train_loader = build_loader(train_set, True)
+    val_loader = build_loader(val_set, False)
+    test_loader = build_loader(test_set, False)
 
     logger = TensorBoardLogger(
         'lightning_logs',
@@ -68,17 +68,18 @@ if __name__ == '__main__':
     )
 
     trainer = Trainer(
-        # accelerator='gpu',
+        accelerator='gpu' if device.type == 'cuda' else 'cpu',
         max_epochs=args.epochs,
+        check_val_every_n_epoch=5,
         logger=logger,
         callbacks=[
-            # ModelCheckpoint(
-            #     monitor='Validation loss',
-            #     mode='min',
-            #     save_top_k=3,
-            #     save_last=True,
-            # ),
-            # EarlyStopping(monitor='Validation loss', mode='min', patience=args.patience)
+            ModelCheckpoint(
+                monitor='val loss',
+                mode='min',
+                save_top_k=3,
+                save_last=True,
+            ),
+            EarlyStopping(monitor='val loss', mode='min', patience=args.patience)
         ],
     )
 
@@ -87,7 +88,7 @@ if __name__ == '__main__':
     trainer.fit(
         model,
         train_loader,
-        dev_loader,
+        val_loader,
     )
 
     test_batch = next(iter(test_loader))

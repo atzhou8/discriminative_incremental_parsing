@@ -8,12 +8,17 @@ class EmbeddingModel:
     tokenizations and embeddings.
     """
 
-    def __init__(self, model_name):
+    def __init__(self, model_name, device):
+        self.device = device
         self.tokenizer = AutoTokenizer.from_pretrained(model_name)
-        self.model = AutoModelForCausalLM.from_pretrained(model_name)
+        self.model = AutoModelForCausalLM.from_pretrained(model_name).to(device)
         self.config = self.model.config
 
-    def get_tokenization(self, sentences):
+    def to(self, device):
+        self.device = device
+        self.model.to(device)
+
+    def get_tokenization(self, sentences, max_len):
         """Retrieves tokenization scheme given a batch of sentences
 
         Args:
@@ -26,7 +31,9 @@ class EmbeddingModel:
             return_tensors='pt',
             padding=True,
             truncation=True,
+            max_length = max_len
         )
+        tokenization.to(self.device)
         return tokenization
     
     def get_representations(self, sentences, max_len, layer=-1):
@@ -34,7 +41,7 @@ class EmbeddingModel:
         units if necessary. Retrieve embeddings from the last transformer layer
         by default.
         """
-        tokenization = self.get_tokenization(sentences)
+        tokenization = self.get_tokenization(sentences, max_len)
         embeddings = self.model(
             **tokenization, 
             output_hidden_states=True
@@ -50,12 +57,15 @@ class EmbeddingModel:
         embeddings_cleaned = torch.zeros(
             batch_size,
             num_words,
-            embedding_dim
+            embedding_dim,
+            device=self.device
         )
 
         for batch, word_ids in enumerate(batch_word_ids):
-            sentence_embed = torch.zeros(num_words, embedding_dim)
-            sentence_token_counts = torch.zeros(num_words)
+            sentence_embed = torch.zeros(num_words, embedding_dim, 
+                                         device=self.device)
+            sentence_token_counts = torch.zeros(num_words,
+                                                device=self.device)
             for embed_id, word_id in enumerate(word_ids):
                 if word_id is not None: # ignore BOS/EOS/pad, index starts at 1
                     sentence_embed[word_id+1] += embeddings[batch, embed_id, :]

@@ -15,10 +15,10 @@ class Parser(pl.LightningModule):
         embedding_model_name, 
         prob_reg=1e-4,
         learning_rate=1e-4,
-        potential_clamp=10
+        potential_clamp=10, 
     ):
         super(Parser, self).__init__()
-        self.embedding_model = EmbeddingModel(embedding_model_name)
+        self.embedding_model = EmbeddingModel(embedding_model_name, self.device)
         self.embedding_size = self.embedding_model.config.hidden_size
 
         self.W_head = torch.nn.Parameter(
@@ -40,6 +40,9 @@ class Parser(pl.LightningModule):
     def configure_optimizers(self):
         optimizer = torch.optim.Adam(self.parameters(), lr=self.lr)
         return optimizer
+    
+    def setup(self, stage=None):
+        self.embedding_model.to(self.device)
 
     def predict(self, sentences, lengths):
         with torch.no_grad():
@@ -48,9 +51,8 @@ class Parser(pl.LightningModule):
             best_trees = mst(mt.scores.detach().clone(), mt.mask) # type: ignore
 
             return best_trees
-
-    def training_step(self, batch, batch_idx):
-        sentences, gold_trees, lengths = batch
+        
+    def get_loss(self, sentences, gold_trees, lengths):
         edge_scores = self.forward(sentences, lengths)
         
         # clamp for stability
@@ -61,12 +63,33 @@ class Parser(pl.LightningModule):
         mt = MatrixTree(scores=edge_scores_clipped, lens=lengths-1)
         
         # regularize loss via param norm and clip loss
+        gold_trees.to(self.device)
         log_probs = mt.log_prob(gold_trees).double().sum()
         param_norm = sum(p.norm()**2 for p in self.parameters())
         weight_diff = torch.abs(edge_scores_clipped - edge_scores)
         weight_loss = weight_diff[torch.isfinite(weight_diff)].sum()
         loss = -self.prob_reg * log_probs + param_norm + weight_loss
-        self.log('Train loss', loss, prog_bar=True)
+        return loss, weight_loss, log_probs
+
+    def training_step(self, batch, batch_idx):
+        sentences, gold_trees, lengths = batch
+        gold_trees = gold_trees.to(self.device)
+        lengths = lengths.to(self.device)
+
+        loss, weights, probs = self.get_loss(sentences, gold_trees, lengths)
+        self.log('train loss', loss, prog_bar=True)
+        self.log('train weight diff', weights)
+        self.log('train probs', probs)
+        return loss
+    
+    def validation_step(self, batch, batch_idx):
+        sentences, gold_trees, lengths = batch
+        gold_trees = gold_trees.to(self.device)
+        lengths = lengths.to(self.device)
+
+        loss, _, probs = self.get_loss(sentences, gold_trees, lengths)
+        self.log('val loss', loss, prog_bar=True)
+        self.log('val probs', probs)
         return loss
 
     def forward(self, sentences, lengths):
@@ -77,6 +100,7 @@ class Parser(pl.LightningModule):
             sentences : batch of sentences where each sentence is a list of
                         strings
         """
+        self.embedding_model.to(self.device)
         with torch.no_grad():
             embeddings = self.embedding_model.get_representations(
                 sentences,
@@ -96,7 +120,11 @@ class Parser(pl.LightningModule):
         edge_scores = einsum(self.w_score, edge_weights, 'k, b n m k -> b n m')
 
         # Mask out self-connections (null nodes handled by supar)
-        self_arc_mask = torch.eye(edge_scores.size(1)).bool().unsqueeze(0)
+        self_arc_mask = torch.eye(
+            edge_scores.size(1),
+            device=self.device,
+            dtype=torch.bool
+        ).unsqueeze(0)
         edge_scores = edge_scores.masked_fill(
             self_arc_mask, 
             float('-inf')
