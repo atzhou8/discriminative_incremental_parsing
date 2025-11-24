@@ -12,7 +12,6 @@ from torch.utils.data import DataLoader
 
 from model.dataset import ParsingDataset, parsing_collater
 from model.parser import Parser
-from model.utils import tensors_to_conllu
 
 torch.set_float32_matmul_precision("medium")
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -33,9 +32,9 @@ parser.add_argument('-test', '--test_dir',
                     default=en_test)
 parser.add_argument('-e', '--embedding_model',
                     default=en_llm)
-parser.add_argument('-b', '--batch_size', type=int, default=64)
-parser.add_argument('-lr', '--learning_rate', type=float, default=5e-5)
-parser.add_argument('-n', '--epochs', type=int, default=500)
+parser.add_argument('-b', '--batch_size', type=int, default=128)
+parser.add_argument('-lr', '--learning_rate', type=float, default=1e-4)
+parser.add_argument('-n', '--epochs', type=int, default=250)
 parser.add_argument('-p', '--patience', type=int, default=50)
 
 def build_loader(dataset, shuffle):
@@ -53,7 +52,7 @@ def build_loader(dataset, shuffle):
 if __name__ == '__main__':
     args = parser.parse_args()
 
-    model = Parser(args.embedding_model)
+    model = Parser(args.embedding_model, learning_rate=args.learning_rate)
     train_set = ParsingDataset(args.train_dir)
     test_set = ParsingDataset(args.test_dir)
     val_set = ParsingDataset(args.val_dir)
@@ -76,8 +75,8 @@ if __name__ == '__main__':
             ModelCheckpoint(
                 monitor='val loss',
                 mode='min',
-                save_top_k=3,
-                save_last=True,
+                save_top_k=1,
+                # save_last=True,
             ),
             EarlyStopping(monitor='val loss', mode='min', patience=args.patience)
         ],
@@ -91,9 +90,6 @@ if __name__ == '__main__':
         val_loader,
     )
 
-    test_batch = next(iter(test_loader))
-    sentences, trees, lengths = test_batch
-    y_pred = model.predict(sentences, lengths)
-    tensors_to_conllu(sentences, y_pred, 'test_run.conllu')
+
 
 

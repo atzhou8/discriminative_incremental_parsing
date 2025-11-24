@@ -11,7 +11,11 @@ class EmbeddingModel:
     def __init__(self, model_name, device):
         self.device = device
         self.tokenizer = AutoTokenizer.from_pretrained(model_name)
-        self.model = AutoModelForCausalLM.from_pretrained(model_name).to(device)
+        self.model = AutoModelForCausalLM.from_pretrained(
+            model_name,
+            use_safetensors=True,
+            trust_remote_code=False,
+        ).to(device)
         self.config = self.model.config
 
     def to(self, device):

@@ -13,7 +13,7 @@ class Parser(pl.LightningModule):
     def __init__(
         self, 
         embedding_model_name, 
-        prob_reg=1e-4,
+        reg=1e-5,
         learning_rate=1e-4,
         potential_clamp=10, 
     ):
@@ -33,9 +33,10 @@ class Parser(pl.LightningModule):
         torch.nn.init.kaiming_uniform_(self.W_head)
         torch.nn.init.kaiming_uniform_(self.W_dep)
 
-        self.prob_reg = prob_reg
+        self.reg = reg
         self.lr = learning_rate
         self.score_clamp = potential_clamp
+        self.save_hyperparameters()
 
     def configure_optimizers(self):
         optimizer = torch.optim.Adam(self.parameters(), lr=self.lr)
@@ -63,12 +64,11 @@ class Parser(pl.LightningModule):
         mt = MatrixTree(scores=edge_scores_clipped, lens=lengths-1)
         
         # regularize loss via param norm and clip loss
-        gold_trees.to(self.device)
-        log_probs = mt.log_prob(gold_trees).double().sum()
-        param_norm = sum(p.norm()**2 for p in self.parameters())
+        log_probs = mt.log_prob(gold_trees).double().mean()
+        param_norm = sum(p.norm()**2 for p in self.parameters()) * self.reg
         weight_diff = torch.abs(edge_scores_clipped - edge_scores)
-        weight_loss = weight_diff[torch.isfinite(weight_diff)].sum()
-        loss = -self.prob_reg * log_probs + param_norm + weight_loss
+        weight_loss = weight_diff[torch.isfinite(weight_diff)].sum() * self.reg
+        loss = -log_probs + param_norm + weight_loss
         return loss, weight_loss, log_probs
 
     def training_step(self, batch, batch_idx):
