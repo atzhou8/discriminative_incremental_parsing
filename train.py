@@ -69,13 +69,14 @@ if __name__ == '__main__':
     trainer = Trainer(
         accelerator='gpu' if device.type == 'cuda' else 'cpu',
         max_epochs=args.epochs,
-        check_val_every_n_epoch=5,
+        # check_val_every_n_epoch=5,
         logger=logger,
         callbacks=[
             ModelCheckpoint(
                 monitor='val loss',
                 mode='min',
                 save_top_k=1,
+                filename='best',
                 # save_last=True,
             ),
             EarlyStopping(monitor='val loss', mode='min', patience=args.patience)
@@ -88,7 +89,9 @@ if __name__ == '__main__':
         model,
         train_loader,
         val_loader,
+
     )
+    trainer.test(model=model, dataloaders=val_loader)
 
 
 

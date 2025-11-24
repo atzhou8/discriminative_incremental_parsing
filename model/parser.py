@@ -7,6 +7,7 @@ from supar.structs.tree import MatrixTree
 from supar.structs.fn import mst
 
 from .embedding_model import EmbeddingModel
+from .utils import tensors_to_conllu
 
 class Parser(pl.LightningModule):
 
@@ -38,12 +39,49 @@ class Parser(pl.LightningModule):
         self.score_clamp = potential_clamp
         self.save_hyperparameters()
 
-    def configure_optimizers(self):
-        optimizer = torch.optim.Adam(self.parameters(), lr=self.lr)
-        return optimizer
-    
-    def setup(self, stage=None):
+    def forward(self, sentences, lengths):
+        """Get score for edge (i, j) as: 
+                (w_score.T @ ReLU(W_head @ h_i + W_dep @ h_j))
+
+        Args:
+            sentences : batch of sentences where each sentence is a list of
+                        strings
+        """
         self.embedding_model.to(self.device)
+        with torch.no_grad():
+            embeddings = self.embedding_model.get_representations(
+                sentences,
+                max(lengths)
+            )
+
+        head_weights = einsum(self.W_head, embeddings, 'd k, b n d -> b n k')
+        dep_weights = einsum(self.W_dep, embeddings, 'd k, b n d -> b n k')
+
+        # Broadcast to get all possible head-dep pairs 
+        head_weights = rearrange(head_weights, 'b n k -> b n 1 k')
+        dep_weights = rearrange(dep_weights, 'b n k -> b 1 n k')
+        edge_weights = head_weights + dep_weights # type: ignore | (b, n, n, k) 
+
+        # Score 
+        edge_weights = torch.relu(edge_weights) 
+        edge_scores = einsum(self.w_score, edge_weights, 'k, b n m k -> b n m')
+
+        # Mask out self-connections (null nodes handled by supar)
+        self_arc_mask = torch.eye(
+            edge_scores.size(1),
+            device=self.device,
+            dtype=torch.bool
+        ).unsqueeze(0)
+        edge_scores = edge_scores.masked_fill(
+            self_arc_mask, 
+            float('-inf')
+        )
+
+        # Shift columns for stability
+        column_max = torch.max(edge_scores, dim=-1, keepdim=True)[0]
+        edge_scores = edge_scores - column_max
+
+        return edge_scores
 
     def predict(self, sentences, lengths):
         with torch.no_grad():
@@ -91,48 +129,33 @@ class Parser(pl.LightningModule):
         self.log('val loss', loss, prog_bar=True)
         self.log('val probs', probs)
         return loss
-
-    def forward(self, sentences, lengths):
-        """Get score for edge (i, j) as: 
-                (w_score.T @ ReLU(W_head @ h_i + W_dep @ h_j))
-
-        Args:
-            sentences : batch of sentences where each sentence is a list of
-                        strings
-        """
-        self.embedding_model.to(self.device)
-        with torch.no_grad():
-            embeddings = self.embedding_model.get_representations(
-                sentences,
-                max(lengths)
-            )
-
-        head_weights = einsum(self.W_head, embeddings, 'd k, b n d -> b n k')
-        dep_weights = einsum(self.W_dep, embeddings, 'd k, b n d -> b n k')
-
-        # Broadcast to get all possible head-dep pairs 
-        head_weights = rearrange(head_weights, 'b n k -> b n 1 k')
-        dep_weights = rearrange(dep_weights, 'b n k -> b 1 n k')
-        edge_weights = head_weights + dep_weights # type: ignore | (b, n, n, k) 
-
-        # Score 
-        edge_weights = torch.relu(edge_weights) 
-        edge_scores = einsum(self.w_score, edge_weights, 'k, b n m k -> b n m')
-
-        # Mask out self-connections (null nodes handled by supar)
-        self_arc_mask = torch.eye(
-            edge_scores.size(1),
-            device=self.device,
-            dtype=torch.bool
-        ).unsqueeze(0)
-        edge_scores = edge_scores.masked_fill(
-            self_arc_mask, 
-            float('-inf')
-        )
-
-        # Shift columns for stability
-        column_max = torch.max(edge_scores, dim=-1, keepdim=True)[0]
-        edge_scores = edge_scores - column_max
-
-        return edge_scores
     
+    def on_test_start(self):
+        self.test_predictions = []
+        self.test_correct = []
+
+    def test_step(self, batch, batch_idx):
+        sentences, gold_trees, lengths = batch
+        y_pred = self.predict(sentences, lengths)
+        batch_correct = [
+            (pred == gold).all() for pred, gold in zip(y_pred, gold_trees)
+        ]
+
+        self.test_predictions.extend(zip(sentences, y_pred.cpu().numpy()))
+        self.test_correct.extend(batch_correct)
+
+    def on_test_end(self):
+        acc = sum(self.test_correct) / len(self.test_correct)
+        tensors_to_conllu(
+            [s for s, _ in self.test_predictions],
+            [y for _, y in self.test_predictions],
+            self.logger.log_dir + f'/predictions_acc{acc:.4f}.conllu'
+        )
+    
+    def configure_optimizers(self):
+        optimizer = torch.optim.Adam(self.parameters(), lr=self.lr)
+        return optimizer
+
+    def setup(self, stage=None):
+        self.embedding_model.to(self.device)
+
