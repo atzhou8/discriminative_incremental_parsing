@@ -32,6 +32,7 @@ parser.add_argument('-test', '--test_dir',
                     default=en_test)
 parser.add_argument('-e', '--embedding_model',
                     default=en_llm)
+parser.add_argument('-v', '--version_number', type=int, default=None)
 parser.add_argument('-b', '--batch_size', type=int, default=128)
 parser.add_argument('-lr', '--learning_rate', type=float, default=1e-4)
 parser.add_argument('-n', '--epochs', type=int, default=250)
@@ -43,7 +44,7 @@ def build_loader(dataset, shuffle):
         batch_size=args.batch_size,
         shuffle=shuffle,
         collate_fn=parsing_collater,
-        num_workers=0 if platform.system() == "Windows" else multiprocessing.cpu_count(),
+        num_workers=0 if platform.system() == "Windows" else 6,
         pin_memory=device.type == "cuda",
         persistent_workers=False,
     )
@@ -64,20 +65,22 @@ if __name__ == '__main__':
     logger = TensorBoardLogger(
         'lightning_logs',
         name=args.name,
+        version=args.version_number
     )
+    
 
     trainer = Trainer(
         accelerator='gpu' if device.type == 'cuda' else 'cpu',
         max_epochs=args.epochs,
-        # check_val_every_n_epoch=5,
+        check_val_every_n_epoch=5,
         logger=logger,
         callbacks=[
             ModelCheckpoint(
                 monitor='val loss',
                 mode='min',
                 save_top_k=1,
-                filename='best',
-                # save_last=True,
+                filename='best_{epoch:02d}',
+                save_last=True,
             ),
             EarlyStopping(monitor='val loss', mode='min', patience=args.patience)
         ],
@@ -85,12 +88,22 @@ if __name__ == '__main__':
 
     print('-' * 80)
     print(f'Training on {args.train_dir}')
-    trainer.fit(
-        model,
-        train_loader,
-        val_loader,
-
-    )
+    resume_ckpt = Path(logger.log_dir) / 'checkpoints' / 'last.ckpt'
+    if resume_ckpt.exists():
+        print(f'Resuming model {args.name}, version {args.version_number}')
+        trainer.fit(
+            model,
+            train_loader,
+            val_loader,
+            ckpt_path=resume_ckpt
+        )
+    else:
+        print('Initializing new model')
+        trainer.fit(
+            model,
+            train_loader,
+            val_loader,
+        )
     trainer.test(model=model, dataloaders=val_loader)
 
 

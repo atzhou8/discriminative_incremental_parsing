@@ -14,7 +14,7 @@ class Parser(pl.LightningModule):
     def __init__(
         self, 
         embedding_model_name, 
-        reg=1e-5,
+        reg=1e-6,
         learning_rate=1e-4,
         potential_clamp=10, 
     ):
@@ -132,24 +132,30 @@ class Parser(pl.LightningModule):
     
     def on_test_start(self):
         self.test_predictions = []
-        self.test_correct = []
+        self.tree_correct = []
+        self.node_correct = []
 
     def test_step(self, batch, batch_idx):
         sentences, gold_trees, lengths = batch
         y_pred = self.predict(sentences, lengths)
-        batch_correct = [
+        batch_trees = [
             (pred == gold).all() for pred, gold in zip(y_pred, gold_trees)
         ]
+        batch_nodes = (y_pred == gold_trees).flatten().cpu().tolist()
+        
 
         self.test_predictions.extend(zip(sentences, y_pred.cpu().numpy()))
-        self.test_correct.extend(batch_correct)
+        self.tree_correct.extend(batch_trees)
+        self.node_correct.extend(batch_nodes)
 
     def on_test_end(self):
-        acc = sum(self.test_correct) / len(self.test_correct)
+        tree_acc = sum(self.tree_correct) / len(self.tree_correct)
+        node_acc = sum(self.node_correct) / len(self.node_correct)
+        stat_string = f'epoch={self.current_epoch}_tacc={tree_acc:.4f}_nacc={node_acc:.4f}'
         tensors_to_conllu(
             [s for s, _ in self.test_predictions],
             [y for _, y in self.test_predictions],
-            self.logger.log_dir + f'/predictions_acc{acc:.4f}.conllu'
+            self.logger.log_dir + f'/predictions_{stat_string}.conllu'
         )
     
     def configure_optimizers(self):
