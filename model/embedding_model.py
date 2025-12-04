@@ -40,7 +40,7 @@ class EmbeddingModel:
         tokenization.to(self.device)
         return tokenization
     
-    def get_representations(self, sentences, max_len, layer=-1):
+    def get_representations(self, sentences, max_len, layer=-4):
         """Gets embeddings for each node in a UD tree meaning across subword
         units if necessary. Retrieve embeddings from the last transformer layer
         by default.

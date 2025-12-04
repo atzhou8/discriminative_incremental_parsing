@@ -14,9 +14,10 @@ class Parser(pl.LightningModule):
     def __init__(
         self, 
         embedding_model_name, 
-        reg=1e-6,
-        learning_rate=1e-4,
-        potential_clamp=10, 
+        reg,
+        learning_rate,
+        potential_clamp,
+        dropout, 
     ):
         super(Parser, self).__init__()
         self.embedding_model = EmbeddingModel(embedding_model_name, self.device)
@@ -28,9 +29,14 @@ class Parser(pl.LightningModule):
         self.W_dep = torch.nn.Parameter(
             torch.empty(self.embedding_size, self.embedding_size)   
         )
+        self.W_pair = torch.nn.Parameter(
+            torch.empty(self.embedding_size, self.embedding_size)
+        )
         self.w_score = torch.nn.Parameter(
             torch.randn(self.embedding_size)
         )
+        self.dropout = torch.nn.Dropout(dropout)
+        torch.nn.init.kaiming_uniform_(self.W_pair)
         torch.nn.init.kaiming_uniform_(self.W_head)
         torch.nn.init.kaiming_uniform_(self.W_dep)
 
@@ -39,85 +45,102 @@ class Parser(pl.LightningModule):
         self.score_clamp = potential_clamp
         self.save_hyperparameters()
 
-    def forward(self, sentences, lengths):
+    def forward(self, sentences, lengths, clamp=False):
         """Get score for edge (i, j) as: 
-                (w_score.T @ ReLU(W_head @ h_i + W_dep @ h_j))
+                
+                (w_score.T @ ReLU(W_head @ h_i + W_dep @ h_j) + h_i.T @ W_pair h_j)
 
         Args:
             sentences : batch of sentences where each sentence is a list of
                         strings
         """
-        self.embedding_model.to(self.device)
         with torch.no_grad():
             embeddings = self.embedding_model.get_representations(
                 sentences,
                 max(lengths)
             )
 
+
         head_weights = einsum(self.W_head, embeddings, 'd k, b n d -> b n k')
         dep_weights = einsum(self.W_dep, embeddings, 'd k, b n d -> b n k')
+
 
         # Broadcast to get all possible head-dep pairs 
         head_weights = rearrange(head_weights, 'b n k -> b n 1 k')
         dep_weights = rearrange(dep_weights, 'b n k -> b 1 n k')
-        edge_weights = head_weights + dep_weights # type: ignore | (b, n, n, k) 
+        edge_weights = head_weights + dep_weights # type: ignore | (b, n, n, k)
+        edge_weights = self.dropout(edge_weights) 
 
         # Score 
-        edge_weights = torch.relu(edge_weights) 
+        edge_weights = torch.relu(edge_weights)
         edge_scores = einsum(self.w_score, edge_weights, 'k, b n m k -> b n m')
-
-        # Mask out self-connections (null nodes handled by supar)
-        self_arc_mask = torch.eye(
-            edge_scores.size(1),
-            device=self.device,
-            dtype=torch.bool
-        ).unsqueeze(0)
-        edge_scores = edge_scores.masked_fill(
-            self_arc_mask, 
-            float('-inf')
-        )
 
         # Shift columns for stability
         column_max = torch.max(edge_scores, dim=-1, keepdim=True)[0]
         edge_scores = edge_scores - column_max
 
-        return edge_scores
+        # Clamp during training
+        if clamp:
+            edge_scores_clipped = edge_scores.clamp(
+                min=-self.score_clamp,
+                max=self.score_clamp,
+            )
+            clamp_diff = torch.abs(edge_scores_clipped - edge_scores)
+            clamp_diff = clamp_diff[torch.isfinite(clamp_diff)].sum()
+            edge_scores = edge_scores_clipped
+        else:
+            clamp_diff = 0
+
+        mt = MatrixTree(scores=edge_scores, lens=lengths-1)
+        return mt, clamp_diff
 
     def predict(self, sentences, lengths):
         with torch.no_grad():
-            edge_scores = self.forward(sentences, lengths)
-            mt = MatrixTree(scores=edge_scores, lens=lengths-1)
+            mt, _ = self.forward(sentences, lengths)
+        return self._predict(mt, lengths)
+
+    def _predict(self, mt, lengths):
+        with torch.no_grad():
             best_trees = mst(mt.scores.detach().clone(), mt.mask) # type: ignore
 
             return best_trees
-        
-    def get_loss(self, sentences, gold_trees, lengths):
-        edge_scores = self.forward(sentences, lengths)
-        
-        # clamp for stability
-        edge_scores_clipped = edge_scores.clamp(
-            min=-self.score_clamp, 
-            max=self.score_clamp
-        )
-        mt = MatrixTree(scores=edge_scores_clipped, lens=lengths-1)
-        
-        # regularize loss via param norm and clip loss
+            
+    def _loss(self, mt, gold_trees, clamp_diff):
         log_probs = mt.log_prob(gold_trees).double().mean()
-        param_norm = sum(p.norm()**2 for p in self.parameters()) * self.reg
-        weight_diff = torch.abs(edge_scores_clipped - edge_scores)
-        weight_loss = weight_diff[torch.isfinite(weight_diff)].sum() * self.reg
-        loss = -log_probs + param_norm + weight_loss
-        return loss, weight_loss, log_probs
+        param_norm = sum(p.norm() ** 2 for p in self.parameters()) * self.reg
+        clamp_loss = clamp_diff * self.reg
+        loss = -log_probs + param_norm + clamp_loss
+        return loss, clamp_loss, log_probs
+  
+    def _accuracy(self, y, y_pred, lengths):
+        mask = torch.arange(y_pred.shape[1], device=self.device)[None, :] < lengths[:, None]
+        trees_equal = (y_pred == y) | ~mask
+        tree_acc = trees_equal.all(dim=1).float().mean()
+
+        node_matches = ((y_pred == y) & mask).sum()
+        node_total = mask.sum().clamp_min(1)
+        node_acc = (node_matches / node_total).item()
+
+        return tree_acc, node_acc, node_total
 
     def training_step(self, batch, batch_idx):
         sentences, gold_trees, lengths = batch
         gold_trees = gold_trees.to(self.device)
         lengths = lengths.to(self.device)
 
-        loss, weights, probs = self.get_loss(sentences, gold_trees, lengths)
+        mt, clamp_diff = self.forward(sentences, lengths, clamp=True)
+        loss, clamp_loss, probs = self._loss(mt, gold_trees, clamp_diff)
         self.log('train loss', loss, prog_bar=True)
-        self.log('train weight diff', weights)
         self.log('train probs', probs)
+        self.log('clamp loss', clamp_loss)
+
+        # Get train accuracy once per 5 epochs
+        if self.current_epoch % 5 == 0 and batch_idx == 0:
+            y_pred = self._predict(mt, lengths)
+            tree_acc, node_acc, _ = self._accuracy(gold_trees, y_pred, lengths)
+            self.log('train tree acc', tree_acc, prog_bar=True)
+            self.log('train node acc', node_acc)
+
         return loss
     
     def validation_step(self, batch, batch_idx):
@@ -125,32 +148,39 @@ class Parser(pl.LightningModule):
         gold_trees = gold_trees.to(self.device)
         lengths = lengths.to(self.device)
 
-        loss, _, probs = self.get_loss(sentences, gold_trees, lengths)
+        mt, clamp_diff = self.forward(sentences, lengths, clamp=True)
+        loss, _, probs = self._loss(mt, gold_trees, clamp_diff)
+        y_pred = self._predict(mt, lengths)
+        tree_acc, node_acc, _ = self._accuracy(gold_trees, y_pred, lengths)
+
         self.log('val loss', loss, prog_bar=True)
         self.log('val probs', probs)
+        self.log('val tree acc', tree_acc, prog_bar=True)
+        self.log('val node acc', node_acc)
+
         return loss
     
     def on_test_start(self):
         self.test_predictions = []
-        self.tree_correct = []
-        self.node_correct = []
+        self.node_acc = self.node_total = self.tree_acc = self.tree_total = 0
 
     def test_step(self, batch, batch_idx):
         sentences, gold_trees, lengths = batch
-        y_pred = self.predict(sentences, lengths)
-        batch_trees = [
-            (pred == gold).all() for pred, gold in zip(y_pred, gold_trees)
-        ]
-        batch_nodes = (y_pred == gold_trees).flatten().cpu().tolist()
-        
+        gold_trees = gold_trees.to(self.device)
+        lengths = lengths.to(self.device)
 
+        y_pred = self.predict(sentences, lengths)
+        tree_acc, node_acc, node_total = self._accuracy(gold_trees, y_pred, lengths)
+        
         self.test_predictions.extend(zip(sentences, y_pred.cpu().numpy()))
-        self.tree_correct.extend(batch_trees)
-        self.node_correct.extend(batch_nodes)
+        self.tree_acc += tree_acc
+        self.tree_total += y_pred.shape[0]
+        self.node_acc += node_acc
+        self.node_total += node_total
 
     def on_test_end(self):
-        tree_acc = sum(self.tree_correct) / len(self.tree_correct)
-        node_acc = sum(self.node_correct) / len(self.node_correct)
+        tree_acc = self.tree_acc / self.tree_total
+        node_acc = self.node_acc / self.node_total
         stat_string = f'epoch={self.current_epoch}_tacc={tree_acc:.4f}_nacc={node_acc:.4f}'
         tensors_to_conllu(
             [s for s, _ in self.test_predictions],
