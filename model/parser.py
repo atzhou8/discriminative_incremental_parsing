@@ -136,7 +136,10 @@ class Parser(pl.LightningModule):
 
         # Get train accuracy once per 5 epochs
         if self.current_epoch % 5 == 0 and batch_idx == 0:
-            y_pred = self._predict(mt, lengths)
+            self.eval()
+            with torch.no_grad():
+                y_pred = self._predict(mt, lengths)
+            self.train()
             tree_acc, node_acc, _ = self._accuracy(gold_trees, y_pred, lengths)
             self.log('train tree acc', tree_acc, prog_bar=True)
             self.log('train node acc', node_acc)
@@ -162,16 +165,18 @@ class Parser(pl.LightningModule):
     
     def on_test_start(self):
         self.test_predictions = []
-        self.node_acc = self.node_total = self.tree_acc = self.tree_total = 0
+        self.node_acc = self.node_total = self.tree_acc = self.tree_total = self.probs = 0
 
     def test_step(self, batch, batch_idx):
         sentences, gold_trees, lengths = batch
         gold_trees = gold_trees.to(self.device)
         lengths = lengths.to(self.device)
 
-        y_pred = self.predict(sentences, lengths)
+        mt, clamp_diff = self.forward(sentences, lengths, clamp=True)
+        loss, _, probs = self._loss(mt, gold_trees, clamp_diff)
+        y_pred = self._predict(mt, lengths)
         tree_acc, node_acc, node_total = self._accuracy(gold_trees, y_pred, lengths)
-        
+       
         self.test_predictions.extend(zip(sentences, y_pred.cpu().numpy()))
         self.tree_acc += tree_acc
         self.tree_total += y_pred.shape[0]

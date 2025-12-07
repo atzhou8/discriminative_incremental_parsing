@@ -12,6 +12,7 @@ from torch.utils.data import DataLoader
 
 from model.dataset import ParsingDataset, parsing_collater
 from model.parser import Parser
+from model.utils import build_loader
 
 torch.set_float32_matmul_precision("medium")
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -29,8 +30,6 @@ parser.add_argument('-train', '--train_dir',
                     default=en_train)
 parser.add_argument('-val', '--val_dir',
                     default=en_dev)
-parser.add_argument('-test', '--test_dir',
-                    default=en_test)
 parser.add_argument('-e', '--embedding_model',
                     default=en_llm)
 parser.add_argument('-r', '--regularization', type=float, default=1e-1)
@@ -43,17 +42,6 @@ parser.add_argument('-n', '--epochs', type=int, default=250)
 parser.add_argument('-p', '--patience', type=int, default=50)
 parser.add_argument('--val_every_n', type=int, default=5)
 
-def build_loader(dataset, shuffle):
-    return DataLoader(
-        dataset,
-        batch_size=args.batch_size,
-        shuffle=shuffle,
-        collate_fn=parsing_collater,
-        num_workers=0 if platform.system() == "Windows" else 6,
-        pin_memory=device.type == "cuda",
-        persistent_workers=False,
-    )
-
 
 if __name__ == '__main__':
     args = parser.parse_args()
@@ -65,13 +53,17 @@ if __name__ == '__main__':
         learning_rate=args.learning_rate,
         dropout=args.dropout
     )
-    train_set = ParsingDataset(args.train_dir)
-    test_set = ParsingDataset(args.test_dir)
-    val_set = ParsingDataset(args.val_dir)
 
-    train_loader = build_loader(train_set, True)
-    val_loader = build_loader(val_set, False)
-    test_loader = build_loader(test_set, False)
+    train_loader = build_loader(
+        args.train_dir, 
+        batch_size=args.batch_size, 
+        shuffle=True
+    )
+    val_loader = build_loader(
+        args.val_dir,
+        batch_size=args.batch_size,
+        shuffle=False
+    )
 
     logger = TensorBoardLogger(
         'lightning_logs',
