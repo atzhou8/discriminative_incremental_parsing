@@ -87,6 +87,7 @@ if __name__ == '__main__':
             ),
             EarlyStopping(monitor='val loss', mode='min', patience=args.patience)
         ],
+        inference_mode=False
     )
 
     print('-' * 80)

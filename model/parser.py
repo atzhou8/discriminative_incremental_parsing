@@ -106,11 +106,16 @@ class Parser(pl.LightningModule):
             return best_trees
             
     def _loss(self, mt, gold_trees, clamp_diff):
-        log_probs = mt.log_prob(gold_trees).double().mean()
+        log_partition = mt.log_partition
+        scores = mt.score(gold_trees)
+        marginals = mt.marginals
+        
+        log_probs = (scores - log_partition).double().mean()
+        entropy = (log_partition - (marginals * mt.scores).sum((-1, -2))).mean()
         param_norm = sum(p.norm() ** 2 for p in self.parameters()) * self.reg
         clamp_loss = clamp_diff * self.reg
-        loss = -log_probs + param_norm + clamp_loss
-        return loss, clamp_loss, log_probs
+        loss = -log_probs - entropy + param_norm + clamp_loss
+        return loss, clamp_loss, log_probs, entropy
   
     def _accuracy(self, y, y_pred, lengths):
         mask = torch.arange(y_pred.shape[1], device=self.device)[None, :] < lengths[:, None]
@@ -122,6 +127,12 @@ class Parser(pl.LightningModule):
         node_acc = (node_matches / node_total).item()
 
         return tree_acc, node_acc, node_total
+    
+    def on_before_optimizer_step(self, optimizer):
+        grads = [param.grad.detach().flatten() for param in self.parameters() if param.grad is not None]
+        if grads:
+            grad_norm = torch.linalg.vector_norm(torch.cat(grads))
+            self.log('grad_norm', grad_norm, on_step=True, on_epoch=False, prog_bar=False)
 
     def training_step(self, batch, batch_idx):
         sentences, gold_trees, lengths = batch
@@ -129,8 +140,9 @@ class Parser(pl.LightningModule):
         lengths = lengths.to(self.device)
 
         mt, clamp_diff = self.forward(sentences, lengths, clamp=True)
-        loss, clamp_loss, probs = self._loss(mt, gold_trees, clamp_diff)
+        loss, clamp_loss, probs, entropy = self._loss(mt, gold_trees, clamp_diff)
         self.log('train loss', loss, prog_bar=True)
+        self.log('train entropy', entropy)
         self.log('train probs', probs)
         self.log('clamp loss', clamp_loss)
 
@@ -152,11 +164,12 @@ class Parser(pl.LightningModule):
         lengths = lengths.to(self.device)
 
         mt, clamp_diff = self.forward(sentences, lengths, clamp=True)
-        loss, _, probs = self._loss(mt, gold_trees, clamp_diff)
+        loss, _, probs, entropy = self._loss(mt, gold_trees, clamp_diff)
         y_pred = self._predict(mt, lengths)
         tree_acc, node_acc, _ = self._accuracy(gold_trees, y_pred, lengths)
 
         self.log('val loss', loss, prog_bar=True)
+        self.log('val entropy', entropy)
         self.log('val probs', probs)
         self.log('val tree acc', tree_acc, prog_bar=True)
         self.log('val node acc', node_acc)

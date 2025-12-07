@@ -19,7 +19,13 @@ words, trees, lengths = batch
 
 # Model training
 embedding_model = 'goldfish-models/eng_latn_1000mb'
-model = Parser(embedding_model_name=embedding_model)
+model = Parser(
+    embedding_model_name=embedding_model,
+    reg=1e-2,
+    learning_rate=1e-3,
+    potential_clamp=20,
+    dropout=0
+)
 loss = model.training_step(batch, 0)
 loss.backward()
 print(f'Loss = {loss}')
