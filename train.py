@@ -40,6 +40,7 @@ parser.add_argument('-v', '--version_number', type=int, default=None)
 parser.add_argument('-b', '--batch_size', type=int, default=128)
 parser.add_argument('-n', '--epochs', type=int, default=250)
 parser.add_argument('-p', '--patience', type=int, default=50)
+parser.add_argument('-er', '--entropy_reg', type=float, default=1)
 parser.add_argument('--val_every_n', type=int, default=5)
 
 
@@ -51,7 +52,8 @@ if __name__ == '__main__':
         reg=args.regularization,
         potential_clamp=args.clamp, 
         learning_rate=args.learning_rate,
-        dropout=args.dropout
+        dropout=args.dropout,
+        entropy_reg=args.entropy_reg
     )
 
     train_loader = build_loader(
@@ -70,7 +72,6 @@ if __name__ == '__main__':
         name=args.name,
         version=args.version_number
     )
-    
 
     trainer = Trainer(
         accelerator='gpu' if device.type == 'cuda' else 'cpu',

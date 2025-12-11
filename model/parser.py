@@ -17,30 +17,34 @@ class Parser(pl.LightningModule):
         reg,
         learning_rate,
         potential_clamp,
-        dropout, 
+        dropout,
+        entropy_reg, 
     ):
         super(Parser, self).__init__()
         self.embedding_model = EmbeddingModel(embedding_model_name, self.device)
         self.embedding_size = self.embedding_model.config.hidden_size
 
+
+        self.projection = torch.nn.Linear(self.embedding_size, self.embedding_size // 2)
+        torch.nn.init.kaiming_uniform_(self.projection.weight)
+
+        self.embedding_size = self.embedding_size // 2
         self.W_head = torch.nn.Parameter(
             torch.empty(self.embedding_size, self.embedding_size)
         )
         self.W_dep = torch.nn.Parameter(
             torch.empty(self.embedding_size, self.embedding_size)   
         )
-        self.W_pair = torch.nn.Parameter(
-            torch.empty(self.embedding_size, self.embedding_size)
-        )
         self.w_score = torch.nn.Parameter(
             torch.randn(self.embedding_size)
         )
+    
         self.dropout = torch.nn.Dropout(dropout)
-        torch.nn.init.kaiming_uniform_(self.W_pair)
         torch.nn.init.kaiming_uniform_(self.W_head)
         torch.nn.init.kaiming_uniform_(self.W_dep)
 
         self.reg = reg
+        self.entropy_reg = entropy_reg
         self.lr = learning_rate
         self.score_clamp = potential_clamp
         self.save_hyperparameters()
@@ -48,7 +52,7 @@ class Parser(pl.LightningModule):
     def forward(self, sentences, lengths, clamp=False):
         """Get score for edge (i, j) as: 
                 
-                (w_score.T @ ReLU(W_head @ h_i + W_dep @ h_j) + h_i.T @ W_pair h_j)
+                w_score.T @ ReLU(W_head @ h_i + W_dep @ h_j)
 
         Args:
             sentences : batch of sentences where each sentence is a list of
@@ -60,7 +64,8 @@ class Parser(pl.LightningModule):
                 max(lengths)
             )
 
-
+        embeddings = self.projection(embeddings)
+        embeddings = torch.relu(embeddings)
         head_weights = einsum(self.W_head, embeddings, 'd k, b n d -> b n k')
         dep_weights = einsum(self.W_dep, embeddings, 'd k, b n d -> b n k')
 
@@ -75,7 +80,7 @@ class Parser(pl.LightningModule):
         edge_weights = torch.relu(edge_weights)
         edge_scores = einsum(self.w_score, edge_weights, 'k, b n m k -> b n m')
 
-        # Shift columns for stability
+        # # Shift columns for stability
         column_max = torch.max(edge_scores, dim=-1, keepdim=True)[0]
         edge_scores = edge_scores - column_max
 
@@ -114,7 +119,7 @@ class Parser(pl.LightningModule):
         entropy = (log_partition - (marginals * mt.scores).sum((-1, -2))).mean()
         param_norm = sum(p.norm() ** 2 for p in self.parameters()) * self.reg
         clamp_loss = clamp_diff * self.reg
-        loss = -log_probs - entropy + param_norm + clamp_loss
+        loss = -log_probs - self.entropy_reg * entropy + param_norm + clamp_loss
         return loss, clamp_loss, log_probs, entropy
   
     def _accuracy(self, y, y_pred, lengths):
@@ -145,6 +150,9 @@ class Parser(pl.LightningModule):
         self.log('train entropy', entropy)
         self.log('train probs', probs)
         self.log('clamp loss', clamp_loss)
+        self.log('train entropy percent', -entropy / loss)
+        self.log('train probs percent', -probs / loss)
+        self.log('clamp loss percent', clamp_loss / loss)
 
         # Get train accuracy once per 5 epochs
         if self.current_epoch % 5 == 0 and batch_idx == 0:
@@ -171,6 +179,8 @@ class Parser(pl.LightningModule):
         self.log('val loss', loss, prog_bar=True)
         self.log('val entropy', entropy)
         self.log('val probs', probs)
+        self.log('val entropy percent', -entropy / loss)
+        self.log('val probs percent', -probs / loss)
         self.log('val tree acc', tree_acc, prog_bar=True)
         self.log('val node acc', node_acc)
 
@@ -186,7 +196,7 @@ class Parser(pl.LightningModule):
         lengths = lengths.to(self.device)
 
         mt, clamp_diff = self.forward(sentences, lengths, clamp=True)
-        loss, _, probs = self._loss(mt, gold_trees, clamp_diff)
+        loss, _, probs, entropy = self._loss(mt, gold_trees, clamp_diff)
         y_pred = self._predict(mt, lengths)
         tree_acc, node_acc, node_total = self._accuracy(gold_trees, y_pred, lengths)
        
