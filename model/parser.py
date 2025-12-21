@@ -24,11 +24,6 @@ class Parser(pl.LightningModule):
         self.embedding_model = EmbeddingModel(embedding_model_name, self.device)
         self.embedding_size = self.embedding_model.config.hidden_size
 
-
-        self.projection = torch.nn.Linear(self.embedding_size, self.embedding_size // 2)
-        torch.nn.init.kaiming_uniform_(self.projection.weight)
-
-        self.embedding_size = self.embedding_size // 2
         self.W_head = torch.nn.Parameter(
             torch.empty(self.embedding_size, self.embedding_size)
         )
@@ -64,8 +59,6 @@ class Parser(pl.LightningModule):
                 max(lengths)
             )
 
-        embeddings = self.projection(embeddings)
-        embeddings = torch.relu(embeddings)
         head_weights = einsum(self.W_head, embeddings, 'd k, b n d -> b n k')
         dep_weights = einsum(self.W_dep, embeddings, 'd k, b n d -> b n k')
 

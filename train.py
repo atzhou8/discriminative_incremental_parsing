@@ -32,9 +32,9 @@ parser.add_argument('-val', '--val_dir',
                     default=en_dev)
 parser.add_argument('-e', '--embedding_model',
                     default=en_llm)
-parser.add_argument('-r', '--regularization', type=float, default=1e-1)
+parser.add_argument('-r', '--regularization', type=float, default=1e-2)
 parser.add_argument('-lr', '--learning_rate', type=float, default=1e-3)
-parser.add_argument('-c', '--clamp', type=int, default=20)
+parser.add_argument('-c', '--clamp', type=int, default=30)
 parser.add_argument('-d', '--dropout', type=float, default=0.6)
 parser.add_argument('-v', '--version_number', type=int, default=None)
 parser.add_argument('-b', '--batch_size', type=int, default=128)
