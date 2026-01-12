@@ -1,14 +1,14 @@
 import torch
 
 from transformers import AutoTokenizer, AutoModelForCausalLM
-from einops import rearrange
 
-class EmbeddingModel:
+class EmbeddingModel(torch.nn.Module):
     """Wrapper around a HuggingFace transformers model for retrieving 
     tokenizations and embeddings.
     """
 
     def __init__(self, model_name, device):
+        super().__init__()
         self.device = device
         self.tokenizer = AutoTokenizer.from_pretrained(model_name)
         self.model = AutoModelForCausalLM.from_pretrained(
@@ -16,11 +16,16 @@ class EmbeddingModel:
             use_safetensors=True,
             trust_remote_code=False,
         ).to(device)
+        self.model.resize_token_embeddings(len(self.tokenizer))
+
+        for name, param in self.model.named_parameters():
+            param.requires_grad = False
+
         self.config = self.model.config
 
     def to(self, device):
         self.device = device
-        self.model.to(device)
+        return super().to(device)
 
     def get_tokenization(self, sentences, max_len):
         """Retrieves tokenization scheme given a batch of sentences

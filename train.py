@@ -18,9 +18,9 @@ torch.set_float32_matmul_precision("medium")
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 ROOT = Path(__file__).resolve().parent
-en_train = ROOT / "data" / "treebanks" / "UD_English-GUM" / "en_gum-ud-train.conllu"
-en_test = ROOT / "data" / "treebanks" / "UD_English-GUM" / "en_gum-ud-test.conllu"
-en_dev = ROOT / "data" / "treebanks" / "UD_English-GUM" / "en_gum-ud-dev.conllu"
+en_train = ROOT / "data" / "treebanks" / "UD_English-GUM" / "en_gum-ud-train_incremental.conllu"
+en_test = ROOT / "data" / "treebanks" / "UD_English-GUM" / "en_gum-ud-test_incremental.conllu"
+en_dev = ROOT / "data" / "treebanks" / "UD_English-GUM" / "en_gum-ud-dev_incremental.conllu"
 en_llm = 'goldfish-models/eng_latn_1000mb'
 
 
@@ -32,6 +32,7 @@ parser.add_argument('-val', '--val_dir',
                     default=en_dev)
 parser.add_argument('-e', '--embedding_model',
                     default=en_llm)
+parser.add_argument('-inc', '--incremental', action='store_true')
 parser.add_argument('-r', '--regularization', type=float, default=1e-2)
 parser.add_argument('-lr', '--learning_rate', type=float, default=1e-3)
 parser.add_argument('-c', '--clamp', type=int, default=30)
@@ -40,7 +41,8 @@ parser.add_argument('-v', '--version_number', type=int, default=None)
 parser.add_argument('-b', '--batch_size', type=int, default=128)
 parser.add_argument('-n', '--epochs', type=int, default=250)
 parser.add_argument('-p', '--patience', type=int, default=50)
-parser.add_argument('-er', '--entropy_reg', type=float, default=1)
+parser.add_argument('-er', '--entropy_reg', type=float, default=0)
+parser.add_argument('-m', '--mask_prob', type=float, default=0.5)
 parser.add_argument('--val_every_n', type=int, default=5)
 
 
@@ -49,6 +51,7 @@ if __name__ == '__main__':
 
     model = Parser(
         embedding_model_name=args.embedding_model,
+        incremental=args.incremental,
         reg=args.regularization,
         potential_clamp=args.clamp, 
         learning_rate=args.learning_rate,
