@@ -16,7 +16,6 @@ class EmbeddingModel(torch.nn.Module):
             use_safetensors=True,
             trust_remote_code=False,
         ).to(device)
-        self.model.resize_token_embeddings(len(self.tokenizer))
 
         for name, param in self.model.named_parameters():
             param.requires_grad = False

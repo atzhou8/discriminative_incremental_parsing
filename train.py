@@ -18,9 +18,9 @@ torch.set_float32_matmul_precision("medium")
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 ROOT = Path(__file__).resolve().parent
-en_train = ROOT / "data" / "treebanks" / "UD_English-GUM" / "en_gum-ud-train_incremental.conllu"
-en_test = ROOT / "data" / "treebanks" / "UD_English-GUM" / "en_gum-ud-test_incremental.conllu"
-en_dev = ROOT / "data" / "treebanks" / "UD_English-GUM" / "en_gum-ud-dev_incremental.conllu"
+en_train = ROOT / "data" / "treebanks" / "UD_English-GUM" / "en_gum-ud-train-inc.conllu"
+en_test = ROOT / "data" / "treebanks" / "UD_English-GUM" / "en_gum-ud-test.conllu"
+en_dev = ROOT / "data" / "treebanks" / "UD_English-GUM" / "en_gum-ud-dev.conllu"
 en_llm = 'goldfish-models/eng_latn_1000mb'
 
 
@@ -56,7 +56,8 @@ if __name__ == '__main__':
         potential_clamp=args.clamp, 
         learning_rate=args.learning_rate,
         dropout=args.dropout,
-        entropy_reg=args.entropy_reg
+        entropy_reg=args.entropy_reg,
+        mask_next_prob=args.mask_prob,
     )
 
     train_loader = build_loader(
