@@ -120,7 +120,7 @@ class Parser(pl.LightningModule):
 
     def _predict(self, mt, lengths):
         with torch.no_grad():
-            best_trees = mst(mt.scores.detach().clone(), mt.mask) # type: ignore
+            best_trees = mst(mt.scores.detach().clone(), mt.mask, multiroot=self.incremental) # type: ignore
 
             return best_trees
             
