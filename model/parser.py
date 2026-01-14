@@ -75,7 +75,7 @@ class Parser(pl.LightningModule):
         head_weights = einsum(self.W_head, embeddings, 'd k, b n d -> b n k')
         dep_weights = einsum(self.W_dep, embeddings, 'd k, b n d -> b n k')
         if mask_next:
-            mask = torch.arange(max(lengths), device=device)[None, :] == lengths[:, None]
+            mask = torch.arange(max(lengths), device=self.device)[None, :] == lengths[:, None]
             head_weights[mask] = self.next_head_embed
             dep_weights[mask] = self.next_dep_embed
         head_weights = self.drop(head_weights)
@@ -148,19 +148,7 @@ class Parser(pl.LightningModule):
         return tree_acc, node_acc, node_total
     
     def configure_optimizers(self):
-        parser_params = []
-        embed_params = []
-        for name, p in self.named_parameters():
-            if name.startswith('embedding_model'):
-                embed_params.append(p)
-            else:
-                parser_params.append(p)
-        optimizer = torch.optim.Adam(
-            [
-                {'params': embed_params, 'lr': 5e-5},
-                {'params': parser_params, 'lr': self.learning_rate}
-            ]
-        )
+        optimizer = torch.optim.Adam(self.parameters(), lr=self.learning_rate)
         return optimizer
     
     def on_before_optimizer_step(self, optimizer):
@@ -177,8 +165,12 @@ class Parser(pl.LightningModule):
         gold_trees = gold_trees.to(self.device)
         lengths = lengths.to(self.device)
 
-        mask_next = torch.rand(1).item() < self.mask_next_prob
-        mt, clamp_diff = self.forward(sentences, lengths, clamp=True)
+        if self.current_epoch % 5 == 0 and batch_idx == 0:
+            mask_next = False
+        else:
+            mask_next = torch.rand(1).item() < self.mask_next_prob
+        
+        mt, clamp_diff = self.forward(sentences, lengths, clamp=True, mask_next=mask_next)
         loss, clamp_loss, probs, entropy = self._loss(mt, gold_trees, clamp_diff)
         self.log('train loss', loss, prog_bar=True)
         self.log('train entropy', entropy)
@@ -195,13 +187,15 @@ class Parser(pl.LightningModule):
                 y_pred = self._predict(mt, lengths)
             self.train()
             tree_acc, node_acc, _ = self._accuracy(gold_trees, y_pred, lengths)
-            self.log('train tree acc', tree_acc, prog_bar=True)
-            self.log('train node acc', node_acc)
+            self.log('train acc', tree_acc)
+            self.log('train uas', node_acc, prog_bar=True)
 
         return loss
     
     def on_validation_start(self):
         self.embedding_model.eval()
+        self.drop.eval()
+        self.eval()
 
     def validation_step(self, batch, batch_idx):
         sentences, gold_trees, lengths = batch
@@ -218,8 +212,8 @@ class Parser(pl.LightningModule):
         self.log('val probs', probs)
         self.log('val entropy percent', -entropy / loss)
         self.log('val probs percent', -probs / loss)
-        self.log('val tree acc', tree_acc, prog_bar=True)
-        self.log('val node acc', node_acc)
+        self.log('val acc', tree_acc)
+        self.log('val uas', node_acc, prog_bar=True)
 
         return loss
     

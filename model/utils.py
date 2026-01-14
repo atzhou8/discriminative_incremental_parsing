@@ -30,7 +30,7 @@ def tensors_to_conllu(words, heads, write_path):
 
     return doc
 
-def build_loader(path, batch_size, shuffle=False, num_workers=12):
+def build_loader(path, batch_size, shuffle=False, num_workers=6):
     dataset = ParsingDataset(path)
     return DataLoader(
         dataset,

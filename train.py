@@ -84,8 +84,8 @@ if __name__ == '__main__':
         logger=logger,
         callbacks=[
             ModelCheckpoint(
-                monitor='val loss',
-                mode='min',
+                monitor='val probs',
+                mode='max',
                 save_top_k=1,
                 filename='best_{epoch:02d}',
                 save_last=True,
