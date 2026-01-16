@@ -10,7 +10,7 @@ from pytorch_lightning.loggers import TensorBoardLogger
 from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint
 from torch.utils.data import DataLoader
 
-from model.dataset import ParsingDataset, parsing_collater
+from model.dataset import TreebankDataset, parsing_collater
 from model.parser import Parser
 from model.utils import build_loader
 

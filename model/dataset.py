@@ -1,16 +1,18 @@
 import torch
+import pandas as pd
 
 from torch.utils.data import Dataset
 from torch.nn.utils.rnn import pad_sequence
 from stanza.utils.conll import CoNLL
 
-class ParsingDataset(Dataset):
-    """Dataset for loading sentence embeddings and gold trees 
+
+class TreebankDataset(Dataset):
+    """Dataset for loading sentences and gold trees 
     from a conllu file.
     """
 
     def __init__(self, data_dir):
-        super(ParsingDataset, self).__init__()
+        super(TreebankDataset, self).__init__()
         self.trees = CoNLL.conll2doc(data_dir).sentences
 
     def __len__(self):
@@ -26,9 +28,57 @@ class ParsingDataset(Dataset):
 
         return words, tree, length
 
-def parsing_collater(batch):
+def treebank_collater(batch):
     sentences, trees, lengths = zip(*batch)
     trees = pad_sequence(list(trees), batch_first=True, padding_value=0).long()
     lengths = torch.tensor(list(lengths), dtype=torch.int64)
     
-    return list(sentences), trees, lengths
+    return {
+        'sentences': list(sentences), 
+        'gold_trees': trees, 
+        'lengths': lengths,
+        'cutoffs': None,
+        'conditions': None,
+    }
+
+class PhenomenaDataset(Dataset):
+    """Dataset for loading in sentences and disambiguation points for 
+    the purposes of psycholinguistic evaluation"""
+
+    def __init__(
+            self, 
+            data_dir,
+            condition_col='condition',
+            pos_col='critical_pos',
+            sentence_col='sentence',
+    ):
+        super(PhenomenaDataset, self).__init__()
+        df = pd.read_csv(data_dir)
+        self.conditions = df['condition'].tolist()
+        self.cutoffs = df['critical_pos'].tolist()
+        self.sentences = df['sentence'].tolist()
+
+    def __len__(self):
+        return len(self.sentences)
+
+    def __getitem__(self, idx):
+        words = self.sentences[idx].split(' ') # punct is presplit in file
+        length = len(words) + 1 # add 1 for distinguished root node
+        cutoff = self.cutoffs[idx]
+        condition = self.conditions[idx]
+       
+        return words, length, cutoff, condition
+    
+def phenomena_collater(batch, cutoff_transform=None):
+    if cutoff_transform is None:
+        cutoff_transform = lambda x: x
+    sentences, lengths, cutoffs, conditions = zip(*batch)
+    lengths = torch.tensor(list(lengths), dtype=torch.int64)
+    cutoffs = torch.tensor(list(cutoffs), dtype=torch.int64)
+    return {
+        'sentences': list(sentences), 
+        'gold_trees': None, 
+        'lengths': lengths,
+        'cutoffs': cutoff_transform(cutoffs),
+        'conditions': conditions
+    }

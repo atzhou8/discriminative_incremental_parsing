@@ -37,18 +37,25 @@ class EmbeddingModel(torch.nn.Module):
             sentences, 
             is_split_into_words=True, 
             return_tensors='pt',
-            padding=True,
+            padding='max_length',
             truncation=True,
-            max_length = max_len
+            max_length=max_len
         )
         tokenization.to(self.device)
         return tokenization
     
-    def get_representations(self, sentences, max_len, layer=-3):
+    def get_representations(self, sentences, max_len, layer=-3, cutoffs=None):
         """Gets embeddings for each node in a UD tree meaning across subword
         units if necessary. Retrieve embeddings from the last transformer layer
         by default.
+
+        TODO: run hyperparam search on layer, but seems like any of the 
+        mid-layers are about the same
         """
+        # Cutoff sentences for incremental parsing
+        if cutoffs is not None:
+            sentences = [sentence[:cutoff] for sentence, cutoff in zip(sentences, cutoffs)] 
+
         tokenization = self.get_tokenization(sentences, max_len)
         embeddings = self.model(
             **tokenization, 
@@ -56,11 +63,11 @@ class EmbeddingModel(torch.nn.Module):
         ).hidden_states[layer] # (batch_size, num_words, embedding_dim)
 
         # Strip BOS/EOS and combine subwords by meaning across word id
-        assert max_len <= len(tokenization.word_ids(0))
+        assert max_len >= len(tokenization.word_ids(0))
         batch_size = len(sentences)
         num_words = max_len
         embedding_dim = self.model.config.hidden_size
-        
+
         batch_word_ids = [tokenization.word_ids(i) for i in range(batch_size)]
         embeddings_cleaned = torch.zeros(
             batch_size,
@@ -68,6 +75,7 @@ class EmbeddingModel(torch.nn.Module):
             embedding_dim,
             device=self.device
         )
+         
 
         for batch, word_ids in enumerate(batch_word_ids):
             sentence_embed = torch.zeros(num_words, embedding_dim, 
