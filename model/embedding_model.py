@@ -44,7 +44,7 @@ class EmbeddingModel(torch.nn.Module):
         tokenization.to(self.device)
         return tokenization
     
-    def get_representations(self, sentences, max_len, layer=-3, cutoffs=None):
+    def get_representations(self, sentences, max_len, layer=-5, cutoffs=None):
         """Gets embeddings for each node in a UD tree meaning across subword
         units if necessary. Retrieve embeddings from the last transformer layer
         by default.
@@ -57,10 +57,11 @@ class EmbeddingModel(torch.nn.Module):
             sentences = [sentence[:cutoff] for sentence, cutoff in zip(sentences, cutoffs)] 
 
         tokenization = self.get_tokenization(sentences, max_len)
-        embeddings = self.model(
-            **tokenization, 
-            output_hidden_states=True
-        ).hidden_states[layer] # (batch_size, num_words, embedding_dim)
+        with torch.inference_mode():
+            embeddings = self.model(
+                **tokenization,
+                output_hidden_states=True
+            ).hidden_states[layer]# (batch_size, num_words, embedding_dim)
 
         # Strip BOS/EOS and combine subwords by meaning across word id
         assert max_len >= len(tokenization.word_ids(0))
@@ -68,30 +69,39 @@ class EmbeddingModel(torch.nn.Module):
         num_words = max_len
         embedding_dim = self.model.config.hidden_size
 
-        batch_word_ids = [tokenization.word_ids(i) for i in range(batch_size)]
+        batch_word_ids = torch.tensor(
+            [[(0 if wid is None else wid + 1) for wid in enc.word_ids]
+            for enc in tokenization.encodings],
+            dtype=torch.long,
+            device=self.device
+        )
+        valid = batch_word_ids > 0
+        
         embeddings_cleaned = torch.zeros(
             batch_size,
             num_words,
             embedding_dim,
             device=self.device
         )
-         
+        emb_ids = repeat(batch_word_ids, 'b n -> b n d', d=embedding_dim)
+        embeddings_cleaned.scatter_add_(
+            dim=1, 
+            index=emb_ids, 
+            src=embeddings * valid.unsqueeze(-1)
+        )
 
-        for batch, word_ids in enumerate(batch_word_ids):
-            sentence_embed = torch.zeros(num_words, embedding_dim, 
-                                         device=self.device)
-            sentence_token_counts = torch.zeros(num_words,
-                                                device=self.device)
-            for embed_id, word_id in enumerate(word_ids):
-                if word_id is not None: # ignore BOS/EOS/pad, index starts at 1
-                    sentence_embed[word_id+1] += embeddings[batch, embed_id, :]
-                    sentence_token_counts[word_id+1] += 1
+        
+        counts = torch.zeros(
+            batch_size, 
+            num_words, 
+            device=self.device
+        )
+        counts.scatter_add_(dim=1, index=batch_word_ids, src=valid.to(counts.dtype))
 
-            token_count_denom = sentence_token_counts.clamp_min(1).unsqueeze(-1)
-            sentence_embed = sentence_embed/token_count_denom
-            
-            sentence_embed[sentence_token_counts == 0] = 0
-            embeddings_cleaned[batch, :, :] = sentence_embed
+        denom = repeat(counts.clamp_min(1), 'b n -> b n d', d=embedding_dim)
+        mask = repeat(counts != 0, 'b n -> b n d', d=embedding_dim)
+        embeddings_cleaned = embeddings_cleaned / denom
+        embeddings_cleaned = embeddings_cleaned * mask
 
         return embeddings_cleaned
         

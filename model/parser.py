@@ -159,7 +159,7 @@ class Parser(pl.LightningModule):
         
         log_probs = (scores - log_partition).double().mean()
         entropy = (log_partition - (marginals * mt.scores).sum((-1, -2))).mean()
-        param_norm = sum(p.norm() ** 2 for p in self.parameters()) * self.reg
+        param_norm = sum(p.norm() ** 2 for p in self.parameters() if p.requires_grad) * self.reg
         clamp_loss = clamp_diff * self.reg
         loss = -log_probs - self.entropy_reg * entropy + param_norm + clamp_loss
         return loss, clamp_loss, log_probs, entropy
@@ -220,7 +220,6 @@ class Parser(pl.LightningModule):
             self.eval()
             with torch.no_grad():
                 y_pred = self._predict(mt, lengths)
-            self.train()
             tree_acc, node_acc, _ = self._accuracy(gold_trees, y_pred, lengths)
             self.log('train acc', tree_acc)
             self.log('train uas', node_acc, prog_bar=True)
