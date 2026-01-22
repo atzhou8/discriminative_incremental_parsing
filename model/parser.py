@@ -17,40 +17,55 @@ class Parser(pl.LightningModule):
         reg,
         learning_rate,
         potential_clamp,
-        dropout,
+        emb_dropout,
+        mlp_dropout,
         entropy_reg,
         incremental,
-        mask_next_prob=0.5 
+        llm_output_layer,
+        mask_next_prob, 
+        embedding_dim=None,
     ):
         super(Parser, self).__init__()
-        self.embedding_model = EmbeddingModel(embedding_model_name, self.device)
-        self.embedding_size = self.embedding_model.config.hidden_size
+        self.embedding_model = EmbeddingModel(
+            embedding_model_name, 
+            self.device,
+            out_layer = llm_output_layer
+        )
+        self.llm_dim = self.embedding_model.config.hidden_size
+        if embedding_dim is None:
+            self.embedding_dim = self.llm_dim // 2
+        else:
+            self.embedding_dim = embedding_dim
+        
+        self.embedding_drop = torch.nn.Dropout(emb_dropout)
+        self.mlp_head = torch.nn.Sequential(
+            torch.nn.Linear(self.llm_dim, self.embedding_dim),
+            torch.nn.ReLU(),
+            torch.nn.Dropout(mlp_dropout),
+        )
+        self.mlp_dep = torch.nn.Sequential(
+            torch.nn.Linear(self.llm_dim, self.embedding_dim),
+            torch.nn.ReLU(),
+            torch.nn.Dropout(mlp_dropout),
+        )
+        self.W_pair = torch.nn.Parameter(torch.empty(self.embedding_dim, self.embedding_dim))
+        self.w_head = torch.nn.Parameter(torch.zeros(self.embedding_dim))
+        self.w_dep = torch.nn.Parameter(torch.zeros(self.embedding_dim))
+        self.bias = torch.nn.Parameter(torch.zeros(1))
 
-        self.W_head = torch.nn.Parameter(
-            torch.empty(self.embedding_size, self.embedding_size)
-        )
-        self.W_dep = torch.nn.Parameter(
-            torch.empty(self.embedding_size, self.embedding_size)   
-        )
-        self.w_score = torch.nn.Parameter(
-            torch.randn(self.embedding_size)
-        )
-        self.next_head_embed = torch.nn.Parameter(
-            torch.randn(self.embedding_size)
-        )
-        self.next_dep_embed = torch.nn.Parameter(
-            torch.randn(self.embedding_size)
-        )
-        self.drop = torch.nn.Dropout(dropout)
-        torch.nn.init.kaiming_uniform_(self.W_head)
-        torch.nn.init.kaiming_uniform_(self.W_dep)
+        self.next_head_embed = torch.nn.Parameter(torch.zeros(self.embedding_dim))
+        self.next_dep_embed = torch.nn.Parameter(torch.zeros(self.embedding_dim))
+        self.root_embed = torch.nn.Parameter(torch.zeros(self.embedding_dim))       
+        torch.nn.init.xavier_uniform_(self.W_pair)
 
         # save hyperparams
         self.embedding_model_name = embedding_model_name
         self.reg = reg
+        self.llm_output_layer = llm_output_layer
         self.learning_rate = learning_rate
         self.potential_clamp = potential_clamp
-        self.dropout = dropout
+        self.mlp_dropout = mlp_dropout
+        self.emb_dropout = emb_dropout
         self.entropy_reg = entropy_reg
         self.incremental = incremental
         self.mask_next_prob = mask_next_prob
@@ -70,7 +85,7 @@ class Parser(pl.LightningModule):
     ):
         """Get score for edge (i, j) as: 
                 
-                w_score.T @ ReLU(W_head @ h_i + W_dep @ h_j)
+                h.T@ W_pair @ d + w_head.T @ h + w_dep.T @ h + bias
 
         Args:
             sentences : batch of sentences where each sentence is a list of
@@ -83,25 +98,31 @@ class Parser(pl.LightningModule):
             max_len=max(lengths),
             cutoffs=cutoffs
         )
+        embeddings = self.embedding_drop(embeddings)
 
-        head_weights = einsum(self.W_head, embeddings, 'd k, b n d -> b n k')
-        dep_weights = einsum(self.W_dep, embeddings, 'd k, b n d -> b n k')
+        # Project token representations
+        head_repr = self.mlp_head(embeddings)  # (b, n, d)
+        head_repr[:, 0, :] = self.root_embed
+        dep_repr  = self.mlp_dep(embeddings)   # (b, n, d)
+
         if mask_next:
             cutoffs = cutoffs if cutoffs is not None else lengths
-            mask = torch.arange(max(lengths), device=self.device)[None, :] == cutoffs[:, None]
-            head_weights[mask] = self.next_head_embed
-            dep_weights[mask] = self.next_dep_embed
-        head_weights = self.drop(head_weights)
-        dep_weights = self.drop(dep_weights)
+            n = head_repr.shape[1]
+            mask = torch.arange(n, device=self.device)[None, :] == cutoffs[:, None]
+            head_repr[mask] = self.next_head_embed
+            dep_repr[mask]  = self.next_dep_embed
 
-        # Broadcast to get all possible head-dep pairs 
-        head_weights = rearrange(head_weights, 'b n k -> b n 1 k')
-        dep_weights = rearrange(dep_weights, 'b n k -> b 1 n k')
-        edge_weights = head_weights + dep_weights # type: ignore | (b, n, n, k)
-
-        # Score 
-        edge_weights = torch.relu(edge_weights)
-        edge_scores = einsum(self.w_score, edge_weights, 'k, b n m k -> b n m')
+        paired = einsum(
+            head_repr, 
+            self.W_pair, 
+            dep_repr, 
+            'b h d, d e, b m e -> b h m'
+        )
+        head_scores = einsum(self.w_head, head_repr, 'd, b n d -> b n')
+        head_scores = rearrange(head_scores, 'b n -> b n 1')
+        dep_scores = einsum(self.w_dep, dep_repr, 'd, b n d -> b n')
+        dep_scores = rearrange(dep_scores, 'b n -> b 1 n')
+        edge_scores = paired + head_scores + dep_scores + self.bias
 
         # Shift columns for stability
         column_max = torch.max(edge_scores, dim=-1, keepdim=True)[0]
@@ -125,6 +146,18 @@ class Parser(pl.LightningModule):
             multiroot=self.incremental
         )
         return mt, clamp_diff
+
+    def _loss(self, mt, gold_trees, clamp_diff):
+        log_partition = mt.log_partition
+        scores = mt.score(gold_trees)
+        marginals = mt.marginals
+        
+        log_probs = (scores - log_partition).double().mean()
+        entropy = (log_partition - (marginals * mt.scores).sum((-1, -2))).mean()
+        param_norm = sum(p.norm() ** 2 for p in self.parameters() if p.requires_grad) * self.reg
+        clamp_loss = clamp_diff * self.reg
+        loss = -log_probs - self.entropy_reg * entropy + param_norm + clamp_loss
+        return loss, clamp_loss, log_probs, entropy
     
     def predict(self, sentences, lengths, mask_next=False):
         with torch.no_grad():
@@ -151,18 +184,6 @@ class Parser(pl.LightningModule):
             mask_next=True,
         )
         return mt_full.kl(mt_masked)
-            
-    def _loss(self, mt, gold_trees, clamp_diff):
-        log_partition = mt.log_partition
-        scores = mt.score(gold_trees)
-        marginals = mt.marginals
-        
-        log_probs = (scores - log_partition).double().mean()
-        entropy = (log_partition - (marginals * mt.scores).sum((-1, -2))).mean()
-        param_norm = sum(p.norm() ** 2 for p in self.parameters() if p.requires_grad) * self.reg
-        clamp_loss = clamp_diff * self.reg
-        loss = -log_probs - self.entropy_reg * entropy + param_norm + clamp_loss
-        return loss, clamp_loss, log_probs, entropy
   
     def _accuracy(self, y, y_pred, lengths):
         mask = torch.arange(y_pred.shape[1], device=self.device)[None, :] < lengths[:, None]
@@ -176,7 +197,19 @@ class Parser(pl.LightningModule):
         return tree_acc, node_acc, node_total
     
     def configure_optimizers(self):
-        optimizer = torch.optim.Adam(self.parameters(), lr=self.learning_rate)
+        parser_params = []
+        parser_params += list(self.mlp_head.parameters())
+        parser_params += list(self.mlp_dep.parameters())
+        parser_params += [self.W_pair, self.w_head, self.w_dep, self.bias]
+
+        llm_params = [p for p in self.embedding_model.parameters() if p.requires_grad]
+
+        optimizer = torch.optim.Adam(
+            [
+                {"params": parser_params, "lr": self.learning_rate},
+                {"params": llm_params, "lr": self.learning_rate * 0.01},
+            ],
+        )
         return optimizer
     
     def on_before_optimizer_step(self, optimizer):
@@ -189,9 +222,6 @@ class Parser(pl.LightningModule):
     def to(self, device):
         self.embedding_model.to(device)
         return super().to(device)
-
-    def on_train_start(self):
-        self.embedding_model.eval()
 
     def training_step(self, batch, batch_idx):
         sentences = batch["sentences"]
@@ -217,7 +247,6 @@ class Parser(pl.LightningModule):
 
         # Get train accuracy once per 5 epochs
         if self.current_epoch % 5 == 0 and batch_idx == 0:
-            self.eval()
             with torch.no_grad():
                 y_pred = self._predict(mt, lengths)
             tree_acc, node_acc, _ = self._accuracy(gold_trees, y_pred, lengths)
@@ -228,7 +257,6 @@ class Parser(pl.LightningModule):
     
     def on_validation_start(self):
         self.embedding_model.eval()
-        self.drop.eval()
         self.eval()
 
     def validation_step(self, batch, batch_idx):
@@ -255,7 +283,6 @@ class Parser(pl.LightningModule):
     
     def on_test_start(self):
         self.embedding_model.eval()
-        self.drop.eval()
         self.eval()
         self.test_predictions = []
         self.cutoffs = []

@@ -1,13 +1,14 @@
 import torch
 
 from transformers import AutoTokenizer, AutoModelForCausalLM
+from einops import repeat
 
 class EmbeddingModel(torch.nn.Module):
     """Wrapper around a HuggingFace transformers model for retrieving 
     tokenizations and embeddings.
     """
 
-    def __init__(self, model_name, device):
+    def __init__(self, model_name, device, out_layer=-6):
         super().__init__()
         self.device = device
         self.tokenizer = AutoTokenizer.from_pretrained(model_name)
@@ -17,9 +18,21 @@ class EmbeddingModel(torch.nn.Module):
             trust_remote_code=False,
         ).to(device)
 
+        num_layers = len(self.model.transformer.h) + 1
+        abs_hidden_idx = out_layer if out_layer >= 0 else (num_layers + out_layer)
+        layer_to_unfreeze = abs_hidden_idx
         for name, param in self.model.named_parameters():
-            param.requires_grad = False
+            if name.startswith('transformer.h.'):
+                try:
+                    block_idx = int(name.split('.')[2])  # transformer.h.{idx}
+                except (IndexError, ValueError):
+                    block_idx = None
 
+                param.requires_grad = (block_idx is not None and block_idx < abs_hidden_idx)
+            else:
+                param.requires_grad = False
+
+        self.out_layer = out_layer
         self.config = self.model.config
 
     def to(self, device):
@@ -44,7 +57,7 @@ class EmbeddingModel(torch.nn.Module):
         tokenization.to(self.device)
         return tokenization
     
-    def get_representations(self, sentences, max_len, layer=-5, cutoffs=None):
+    def get_representations(self, sentences, max_len, cutoffs=None):
         """Gets embeddings for each node in a UD tree meaning across subword
         units if necessary. Retrieve embeddings from the last transformer layer
         by default.
@@ -57,11 +70,11 @@ class EmbeddingModel(torch.nn.Module):
             sentences = [sentence[:cutoff] for sentence, cutoff in zip(sentences, cutoffs)] 
 
         tokenization = self.get_tokenization(sentences, max_len)
-        with torch.inference_mode():
-            embeddings = self.model(
-                **tokenization,
-                output_hidden_states=True
-            ).hidden_states[layer]# (batch_size, num_words, embedding_dim)
+        # with torch.inference_mode():
+        embeddings = self.model(
+            **tokenization,
+            output_hidden_states=True
+        ).hidden_states[self.out_layer]# (batch_size, num_words, embedding_dim)
 
         # Strip BOS/EOS and combine subwords by meaning across word id
         assert max_len >= len(tokenization.word_ids(0))
@@ -90,7 +103,6 @@ class EmbeddingModel(torch.nn.Module):
             src=embeddings * valid.unsqueeze(-1)
         )
 
-        
         counts = torch.zeros(
             batch_size, 
             num_words, 

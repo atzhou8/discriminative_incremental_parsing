@@ -10,7 +10,7 @@ from pytorch_lightning.loggers import TensorBoardLogger
 from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint
 from torch.utils.data import DataLoader
 
-from model.dataset import TreebankDataset, parsing_collater
+from model.dataset import TreebankDataset, treebank_collater
 from model.parser import Parser
 from model.utils import build_loader
 
@@ -33,13 +33,16 @@ parser.add_argument('-val', '--val_dir',
 parser.add_argument('-e', '--embedding_model',
                     default=en_llm)
 parser.add_argument('-inc', '--incremental', action='store_true')
+parser.add_argument('-l', '--llm_layer', type=int, default=7)
+parser.add_argument('-dim', '--embedding_dim', type=int, default=512)
 parser.add_argument('-r', '--regularization', type=float, default=1e-2)
-parser.add_argument('-lr', '--learning_rate', type=float, default=1e-3)
-parser.add_argument('-c', '--clamp', type=int, default=30)
-parser.add_argument('-d', '--dropout', type=float, default=0.6)
+parser.add_argument('-lr', '--learning_rate', type=float, default=1e-4)
+parser.add_argument('-c', '--clamp', type=int, default=15)
+parser.add_argument('--mlp_drop', type=float, default=0.3)
+parser.add_argument('--emb_drop', type=float, default=0.2)
 parser.add_argument('-v', '--version_number', type=int, default=None)
 parser.add_argument('-b', '--batch_size', type=int, default=128)
-parser.add_argument('-n', '--epochs', type=int, default=250)
+parser.add_argument('-n', '--epochs', type=int, default=200)
 parser.add_argument('-p', '--patience', type=int, default=50)
 parser.add_argument('-er', '--entropy_reg', type=float, default=0)
 parser.add_argument('-m', '--mask_prob', type=float, default=0.5)
@@ -55,8 +58,11 @@ if __name__ == '__main__':
         reg=args.regularization,
         potential_clamp=args.clamp, 
         learning_rate=args.learning_rate,
-        dropout=args.dropout,
+        mlp_dropout=args.mlp_drop,
+        emb_dropout=args.emb_drop,
         entropy_reg=args.entropy_reg,
+        llm_output_layer=args.llm_layer,
+        embedding_dim=args.embedding_dim,
         mask_next_prob=args.mask_prob,
     )
 
