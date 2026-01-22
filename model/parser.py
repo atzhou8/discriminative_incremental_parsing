@@ -324,6 +324,8 @@ class Parser(pl.LightningModule):
             self.tree_total += 1
             self.node_acc += node_acc
             self.node_total += 1
+            self.log('test acc', tree_acc)
+            self.log('test uas', node_acc)
 
     def on_test_end(self):
         tree_acc = self.tree_acc / self.tree_total
