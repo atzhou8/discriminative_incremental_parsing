@@ -1,5 +1,6 @@
 import supar
 import torch
+import torch.nn.functional as f
 import pytorch_lightning as pl
 
 from einops import einsum, rearrange, repeat
@@ -146,18 +147,6 @@ class Parser(pl.LightningModule):
             multiroot=self.incremental
         )
         return mt, clamp_diff
-
-    def _loss(self, mt, gold_trees, clamp_diff):
-        log_partition = mt.log_partition
-        scores = mt.score(gold_trees)
-        marginals = mt.marginals
-        
-        log_probs = (scores - log_partition).double().mean()
-        entropy = (log_partition - (marginals * mt.scores).sum((-1, -2))).mean()
-        param_norm = sum(p.norm() ** 2 for p in self.parameters() if p.requires_grad) * self.reg
-        clamp_loss = clamp_diff * self.reg
-        loss = -log_probs - self.entropy_reg * entropy + param_norm + clamp_loss
-        return loss, clamp_loss, log_probs, entropy
     
     def predict(self, sentences, lengths, mask_next=False):
         with torch.no_grad():
@@ -195,6 +184,33 @@ class Parser(pl.LightningModule):
         node_acc = (node_matches / node_total).item()
 
         return tree_acc, node_acc, node_total
+
+    def _local_loss(self, mt, gold_trees, clamp_diff, lengths):
+        batch, num_words, _ = mt.scores.shape
+        logits = mt.scores
+        mask = torch.arange(num_words, device=self.device)[None, :] < lengths[:, None]
+        
+        logits = logits.view(batch * num_words, num_words)
+        targets = gold_trees.view(batch * num_words)
+        mask = mask.view(batch * num_words)
+
+        local = f.cross_entropy(logits[mask], targets[mask], reduction="mean")
+        param_norm = sum(p.norm() ** 2 for p in self.parameters() if p.requires_grad) * self.reg
+        clamp_loss = clamp_diff * self.reg
+        loss = local + param_norm + clamp_loss
+        return loss, clamp_loss, local, 0
+
+    def _loss(self, mt, gold_trees, clamp_diff):
+        log_partition = mt.log_partition
+        scores = mt.score(gold_trees)
+        marginals = mt.marginals
+        
+        log_probs = (scores - log_partition).double().mean()
+        entropy = (log_partition - (marginals * mt.scores).sum((-1, -2))).mean()
+        param_norm = sum(p.norm() ** 2 for p in self.parameters() if p.requires_grad) * self.reg
+        clamp_loss = clamp_diff * self.reg
+        loss = -log_probs - self.entropy_reg * entropy + param_norm + clamp_loss
+        return loss, clamp_loss, log_probs, entropy
     
     def configure_optimizers(self):
         parser_params = []
@@ -236,7 +252,10 @@ class Parser(pl.LightningModule):
             mask_next = torch.rand(1).item() < self.mask_next_prob
         
         mt, clamp_diff = self.forward(sentences, lengths, clamp=True, mask_next=mask_next)
-        loss, clamp_loss, probs, entropy = self._loss(mt, gold_trees, clamp_diff)
+        if self.current_epoch < 10:
+            loss, clamp_loss, probs, entropy = self._local_loss(mt, gold_trees, clamp_diff, lengths)
+        else:
+            loss, clamp_loss, probs, entropy = self._loss(mt, gold_trees, clamp_diff)
         self.log('train loss', loss, prog_bar=True)
         self.log('train entropy', entropy)
         self.log('train probs', probs)
