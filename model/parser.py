@@ -41,11 +41,19 @@ class Parser(pl.LightningModule):
         self.embedding_drop = torch.nn.Dropout(emb_dropout)
         self.mlp_head = torch.nn.Sequential(
             torch.nn.Linear(self.llm_dim, self.embedding_dim),
+            torch.nn.GELU(),
+            torch.nn.LayerNorm(self.embedding_dim),
+            torch.nn.Dropout(mlp_dropout),
+            torch.nn.Linear(self.embedding_dim, self.embedding_dim),
             torch.nn.ReLU(),
             torch.nn.Dropout(mlp_dropout),
         )
         self.mlp_dep = torch.nn.Sequential(
             torch.nn.Linear(self.llm_dim, self.embedding_dim),
+            torch.nn.GELU(),
+            torch.nn.LayerNorm(self.embedding_dim),
+            torch.nn.Dropout(mlp_dropout),
+            torch.nn.Linear(self.embedding_dim, self.embedding_dim),
             torch.nn.ReLU(),
             torch.nn.Dropout(mlp_dropout),
         )
@@ -53,6 +61,7 @@ class Parser(pl.LightningModule):
         self.w_head = torch.nn.Parameter(torch.zeros(self.embedding_dim))
         self.w_dep = torch.nn.Parameter(torch.zeros(self.embedding_dim))
         self.bias = torch.nn.Parameter(torch.zeros(1))
+        self.score_drop = torch.nn.Dropout(mlp_dropout)
 
         self.next_head_embed = torch.nn.Parameter(torch.zeros(self.embedding_dim))
         self.next_dep_embed = torch.nn.Parameter(torch.zeros(self.embedding_dim))
@@ -126,8 +135,9 @@ class Parser(pl.LightningModule):
         edge_scores = paired + head_scores + dep_scores + self.bias
 
         # Shift columns for stability
-        column_max = torch.max(edge_scores, dim=-1, keepdim=True)[0]
-        edge_scores = edge_scores - column_max
+        # column_max = torch.max(edge_scores, dim=-1, keepdim=True)[0]
+        # edge_scores = edge_scores - column_max
+        edge_scores = self.score_drop(edge_scores)
 
         # Clamp during training
         if clamp:
@@ -208,7 +218,8 @@ class Parser(pl.LightningModule):
         log_probs = (scores - log_partition).double().mean()
         entropy = (log_partition - (marginals * mt.scores).sum((-1, -2))).mean()
         param_norm = sum(p.norm() ** 2 for p in self.parameters() if p.requires_grad) * self.reg
-        clamp_loss = clamp_diff * self.reg
+        clamp_loss = 0
+        # clamp_loss = clamp_diff * self.reg
         loss = -log_probs - self.entropy_reg * entropy + param_norm + clamp_loss
         return loss, clamp_loss, log_probs, entropy
     
@@ -217,16 +228,17 @@ class Parser(pl.LightningModule):
         parser_params += list(self.mlp_head.parameters())
         parser_params += list(self.mlp_dep.parameters())
         parser_params += [self.W_pair, self.w_head, self.w_dep, self.bias]
-
         llm_params = [p for p in self.embedding_model.parameters() if p.requires_grad]
 
-        optimizer = torch.optim.Adam(
+        opt = torch.optim.AdamW(
             [
-                {"params": parser_params, "lr": self.learning_rate},
-                {"params": llm_params, "lr": self.learning_rate * 0.01},
+                {"params": parser_params, "lr": self.learning_rate, "weight_decay": 1e-2},
+                {"params": llm_params, "lr": self.learning_rate * 0.01, "weight_decay": 1e-3},
             ],
+            betas=(0.9, 0.9),
         )
-        return optimizer
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=100)
+        return {"optimizer": opt, "lr_scheduler": {"scheduler": scheduler, "interval": "step"}}
     
     def on_before_optimizer_step(self, optimizer):
         grads = [param.grad.detach().flatten() 
@@ -246,13 +258,17 @@ class Parser(pl.LightningModule):
         gold_trees = gold_trees.to(self.device)
         lengths = lengths.to(self.device)
 
-        if self.current_epoch % 5 == 0 and batch_idx == 0:
-            mask_next = False
-        else:
-            mask_next = torch.rand(1).item() < self.mask_next_prob
-        
+        layer_to_unfreeze = self.llm_output_layer
+        if self.global_step > 1000 and self.global_step % 1000 == 0:
+            self.embedding_model.unfreeze_layer(layer_to_unfreeze)
+            layer_to_unfreeze = layer_to_unfreeze - 1
+
+        mask_next = torch.rand(1).item() < self.mask_next_prob
+        if self.global_step % 500 == 0:
+            mask_next = False # Turn off mask every 500 steps for train metrics
+
         mt, clamp_diff = self.forward(sentences, lengths, clamp=True, mask_next=mask_next)
-        if self.current_epoch < 10:
+        if self.global_step < 500:
             loss, clamp_loss, probs, entropy = self._local_loss(mt, gold_trees, clamp_diff, lengths)
         else:
             loss, clamp_loss, probs, entropy = self._loss(mt, gold_trees, clamp_diff)
@@ -264,8 +280,8 @@ class Parser(pl.LightningModule):
         self.log('train probs percent', -probs / loss)
         self.log('clamp loss percent', clamp_loss / loss)
 
-        # Get train accuracy once per 5 epochs
-        if self.current_epoch % 5 == 0 and batch_idx == 0:
+        # Get train accuracy once per 500 steps
+        if self.global_step % 500 == 0:
             with torch.no_grad():
                 y_pred = self._predict(mt, lengths)
             tree_acc, node_acc, _ = self._accuracy(gold_trees, y_pred, lengths)

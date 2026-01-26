@@ -22,18 +22,28 @@ class EmbeddingModel(torch.nn.Module):
         abs_hidden_idx = out_layer if out_layer >= 0 else (num_layers + out_layer)
         layer_to_unfreeze = abs_hidden_idx
         for name, param in self.model.named_parameters():
-            if name.startswith('transformer.h.'):
-                try:
-                    block_idx = int(name.split('.')[2])  # transformer.h.{idx}
-                except (IndexError, ValueError):
-                    block_idx = None
-
-                param.requires_grad = (block_idx is not None and block_idx < abs_hidden_idx)
+            if 'lnf' in name:
+                param.requires_grad = True
             else:
                 param.requires_grad = False
 
         self.out_layer = out_layer
         self.config = self.model.config
+
+    def unfreeze_layer(self, layer):
+        if layer < 1:
+            return
+        for name, param in self.model.named_parameters():
+            if name.startswith('transformer.h.'):
+                try:
+                    block_idx = int(name.split('.')[2])  # transformer.h.{idx}
+                except (IndexError, ValueError):
+                    block_idx = None
+                param.requires_grad = (block_idx is not None and block_idx == layer)
+            elif 'lnf' in name:
+                param.requires_grad = True
+            else:
+                param.requires_grad = False
 
     def to(self, device):
         self.device = device
@@ -74,7 +84,7 @@ class EmbeddingModel(torch.nn.Module):
         embeddings = self.model(
             **tokenization,
             output_hidden_states=True
-        ).hidden_states[self.out_layer]# (batch_size, num_words, embedding_dim)
+        ).hidden_states[self.out_layer]
 
         # Strip BOS/EOS and combine subwords by meaning across word id
         assert max_len >= len(tokenization.word_ids(0))

@@ -98,7 +98,9 @@ if __name__ == '__main__':
             ),
             EarlyStopping(monitor='val loss', mode='min', patience=args.patience)
         ],
-        inference_mode=False
+        inference_mode=False,
+        gradient_clip_val=5.0,
+        gradient_clip_algorithm='norm',
     )
 
     print('-' * 80)
