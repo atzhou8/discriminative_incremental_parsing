@@ -48,7 +48,7 @@ if __name__ == "__main__":
         '--mask_next',
         action='store_true',
     )
-    parser.add_argument("--batch-size", type=int, default=32)
+    parser.add_argument("--batch-size", type=int, default=256)
     args = parser.parse_args()
 
     ckpt_dir = Path('lightning_logs') / args.name / f'version_{args.version}' / 'checkpoints'
@@ -82,4 +82,4 @@ if __name__ == "__main__":
     model.set_prediction_save_path(output_dir)
     model.prediction_masknext = args.mask_next
     trainer = Trainer(accelerator="auto", logger=logger, inference_mode=False)
-    trainer.test(model=model, dataloaders=test_loader, ckpt_path=str(best_ckpt))
+    trainer.test(model=model, dataloaders=test_loader)

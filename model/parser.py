@@ -25,6 +25,7 @@ class Parser(pl.LightningModule):
         llm_output_layer,
         mask_next_prob, 
         embedding_dim=None,
+        start_local=False,
     ):
         super(Parser, self).__init__()
         self.embedding_model = EmbeddingModel(
@@ -79,6 +80,7 @@ class Parser(pl.LightningModule):
         self.entropy_reg = entropy_reg
         self.incremental = incremental
         self.mask_next_prob = mask_next_prob
+        self.start_local = start_local
         self.save_hyperparameters()
 
         # path to save predictions
@@ -268,7 +270,7 @@ class Parser(pl.LightningModule):
             mask_next = False # Turn off mask every 500 steps for train metrics
 
         mt, clamp_diff = self.forward(sentences, lengths, clamp=True, mask_next=mask_next)
-        if self.global_step < 500:
+        if self.global_step < 200 and self.start_local:
             loss, clamp_loss, probs, entropy = self._local_loss(mt, gold_trees, clamp_diff, lengths)
         else:
             loss, clamp_loss, probs, entropy = self._loss(mt, gold_trees, clamp_diff)
@@ -340,13 +342,14 @@ class Parser(pl.LightningModule):
                 cutoffs = cutoffs.to(self.device)
 
 
-            mt, _ = self.forward(
+            mt, clamp_diff = self.forward(
                 sentences, 
                 lengths, 
                 clamp=True, 
                 cutoffs=cutoffs,
                 mask_next= self.prediction_masknext
             )
+            loss, _, probs, entropy = self._loss(mt, gold_trees, clamp_diff)
             y_pred = self._predict(mt, lengths)
             if gold_trees is not None:
                 tree_acc, node_acc, _ = self._accuracy(gold_trees, y_pred, lengths)
@@ -361,6 +364,8 @@ class Parser(pl.LightningModule):
             self.node_total += 1
             self.log('test acc', tree_acc)
             self.log('test uas', node_acc)
+            self.log('test probs', probs)
+            self.log('test entropy', entropy)
 
     def on_test_end(self):
         tree_acc = self.tree_acc / self.tree_total

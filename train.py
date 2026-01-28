@@ -38,7 +38,7 @@ parser.add_argument('-dim', '--embedding_dim', type=int, default=512)
 parser.add_argument('-r', '--regularization', type=float, default=1e-2)
 parser.add_argument('-lr', '--learning_rate', type=float, default=1e-4)
 parser.add_argument('-c', '--clamp', type=int, default=15)
-parser.add_argument('--mlp_drop', type=float, default=0.3)
+parser.add_argument('--mlp_drop', type=float, default=0.2)
 parser.add_argument('--emb_drop', type=float, default=0.2)
 parser.add_argument('-v', '--version_number', type=int, default=None)
 parser.add_argument('-b', '--batch_size', type=int, default=128)
@@ -47,6 +47,7 @@ parser.add_argument('-p', '--patience', type=int, default=50)
 parser.add_argument('-er', '--entropy_reg', type=float, default=0)
 parser.add_argument('-m', '--mask_prob', type=float, default=0.5)
 parser.add_argument('--val_every_n', type=int, default=5)
+parser.add_argument('--start_local', action='store_true')
 
 
 if __name__ == '__main__':
@@ -64,6 +65,7 @@ if __name__ == '__main__':
         llm_output_layer=args.llm_layer,
         embedding_dim=args.embedding_dim,
         mask_next_prob=args.mask_prob,
+        start_local=args.start_local
     )
 
     train_loader = build_loader(
@@ -122,7 +124,7 @@ if __name__ == '__main__':
             train_loader,
             val_loader,
         )
-    trainer.test(model=model, dataloaders=val_loader)
+    trainer.save_checkpoint(resume_ckpt) # pl saving best in last.ckpt?
 
 
 
