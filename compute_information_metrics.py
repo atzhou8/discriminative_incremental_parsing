@@ -56,8 +56,10 @@ if __name__ == "__main__":
     df = {
         'condition': [],
         'sentence': [],
-        'kl': [],
     }
+    for k in range(1, args.get_k_after_cp+1):
+        df[f'kl-{k}'] = []
+    df['kl'] = []
     for k in range(1, args.get_k_after_cp+1):
         df[f'kl+{k}'] = []
 
@@ -77,6 +79,9 @@ if __name__ == "__main__":
             kl = model.get_kl(sentences, lengths, cutoffs+k)
             kl = kl.detach().cpu().numpy()
             df[f'kl+{k}'].extend(kl)
+            kl = model.get_kl(sentences, lengths, cutoffs-k)
+            kl = kl.detach().cpu().numpy()
+            df[f'kl-{k}'].extend(kl)
 
         sentences = [' '.join(sentence) for sentence in sentences]
         df['condition'].extend(conditions)
