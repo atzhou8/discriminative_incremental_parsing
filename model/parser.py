@@ -42,19 +42,11 @@ class Parser(pl.LightningModule):
         self.embedding_drop = torch.nn.Dropout(emb_dropout)
         self.mlp_head = torch.nn.Sequential(
             torch.nn.Linear(self.llm_dim, self.embedding_dim),
-            torch.nn.GELU(),
-            torch.nn.LayerNorm(self.embedding_dim),
-            torch.nn.Dropout(mlp_dropout),
-            torch.nn.Linear(self.embedding_dim, self.embedding_dim),
             torch.nn.ReLU(),
             torch.nn.Dropout(mlp_dropout),
         )
         self.mlp_dep = torch.nn.Sequential(
             torch.nn.Linear(self.llm_dim, self.embedding_dim),
-            torch.nn.GELU(),
-            torch.nn.LayerNorm(self.embedding_dim),
-            torch.nn.Dropout(mlp_dropout),
-            torch.nn.Linear(self.embedding_dim, self.embedding_dim),
             torch.nn.ReLU(),
             torch.nn.Dropout(mlp_dropout),
         )
@@ -62,7 +54,6 @@ class Parser(pl.LightningModule):
         self.w_head = torch.nn.Parameter(torch.zeros(self.embedding_dim))
         self.w_dep = torch.nn.Parameter(torch.zeros(self.embedding_dim))
         self.bias = torch.nn.Parameter(torch.zeros(1))
-        self.score_drop = torch.nn.Dropout(mlp_dropout)
 
         self.next_head_embed = torch.nn.Parameter(torch.zeros(self.embedding_dim))
         self.next_dep_embed = torch.nn.Parameter(torch.zeros(self.embedding_dim))
@@ -139,7 +130,6 @@ class Parser(pl.LightningModule):
         # Shift columns for stability
         # column_max = torch.max(edge_scores, dim=-1, keepdim=True)[0]
         # edge_scores = edge_scores - column_max
-        edge_scores = self.score_drop(edge_scores)
 
         # Clamp during training
         if clamp:
