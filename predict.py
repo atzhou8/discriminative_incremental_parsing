@@ -20,7 +20,7 @@ def make_cutoff_transform(spec):
         return lambda x: x + k
     elif spec.startswith('const:'):
         k = int(spec.split(':')[1])
-        return lambda x: k
+        return lambda x: k * torch.ones_like(x)
     else:
         raise ValueError('Invalid specification for cutoffs')
 
@@ -32,6 +32,7 @@ if __name__ == "__main__":
     parser.add_argument('-v', '--version', type=int, required=True)
     parser.add_argument('-i', '--input_dir', required=True)
     parser.add_argument('-o', '--output_dir', default=None)
+    parser.add_argument('--ckpt', default='val')
     parser.add_argument(
         '-d',
         '--dataset_type',
@@ -50,10 +51,14 @@ if __name__ == "__main__":
     )
     parser.add_argument("--batch-size", type=int, default=256)
     args = parser.parse_args()
+    assert args.ckpt in ['val', 'mask', 'last']
 
     ckpt_dir = Path('lightning_logs') / args.name / f'version_{args.version}' / 'checkpoints'
-    print(ckpt_dir)
-    best_ckpt = next(ckpt_dir.glob("best_epoch=*.ckpt"))
+    if args.ckpt == 'last':
+        best_ckpt = ckpt_dir / 'last.ckpt'
+    else:
+        best_ckpt = next(ckpt_dir.glob(f'best_{args.ckpt}_epoch=*.ckpt'))
+    print(f'Predicting from {best_ckpt}')
 
     # Restore model + its hyperparameters from checkpoint
     model = Parser.load_from_checkpoint(

@@ -23,9 +23,10 @@ class Parser(pl.LightningModule):
         entropy_reg,
         incremental,
         llm_output_layer,
-        mask_next_prob, 
+        mask_next_prob,
+        split_trees_prob, 
         embedding_dim=None,
-        start_local=False,
+        local_steps=0,
     ):
         super(Parser, self).__init__()
         self.embedding_model = EmbeddingModel(
@@ -54,10 +55,6 @@ class Parser(pl.LightningModule):
         self.w_head = torch.nn.Parameter(torch.zeros(self.embedding_dim))
         self.w_dep = torch.nn.Parameter(torch.zeros(self.embedding_dim))
         self.bias = torch.nn.Parameter(torch.zeros(1))
-
-        self.next_head_embed = torch.nn.Parameter(torch.zeros(self.embedding_dim))
-        self.next_dep_embed = torch.nn.Parameter(torch.zeros(self.embedding_dim))
-        self.root_embed = torch.nn.Parameter(torch.zeros(self.embedding_dim))       
         torch.nn.init.xavier_uniform_(self.W_pair)
 
         # save hyperparams
@@ -71,12 +68,14 @@ class Parser(pl.LightningModule):
         self.entropy_reg = entropy_reg
         self.incremental = incremental
         self.mask_next_prob = mask_next_prob
-        self.start_local = start_local
+        self.split_trees_prob = split_trees_prob
+        self.local_steps = local_steps
         self.save_hyperparameters()
 
         # path to save predictions
         self.prediction_savepath = None
         self.prediction_masknext = False
+        self.layer_to_unfreeze = llm_output_layer
 
     def forward(
         self, 
@@ -96,24 +95,17 @@ class Parser(pl.LightningModule):
             lengths : number of nodes in each tree, *including a null initial
                       root node* 
         """
-        embeddings = self.embedding_model.get_representations(
+        embeddings, cut_sentences = self.embedding_model.get_representations(
             sentences=sentences,
             max_len=max(lengths),
-            cutoffs=cutoffs
+            cutoffs=cutoffs,
+            mask_next=mask_next,
         )
         embeddings = self.embedding_drop(embeddings)
 
         # Project token representations
         head_repr = self.mlp_head(embeddings)  # (b, n, d)
-        head_repr[:, 0, :] = self.root_embed
         dep_repr  = self.mlp_dep(embeddings)   # (b, n, d)
-
-        if mask_next:
-            cutoffs = cutoffs if cutoffs is not None else lengths
-            n = head_repr.shape[1]
-            mask = torch.arange(n, device=self.device)[None, :] == cutoffs[:, None]
-            head_repr[mask] = self.next_head_embed
-            dep_repr[mask]  = self.next_dep_embed
 
         paired = einsum(
             head_repr, 
@@ -142,17 +134,19 @@ class Parser(pl.LightningModule):
             edge_scores = edge_scores_clipped
         else:
             clamp_diff = 0
-        
+
+        if cutoffs is not None and cutoffs[0] is not None:
+            lengths = cutoffs + 1
         mt = MatrixTree(
             scores=edge_scores, 
             lens=lengths-1, 
             multiroot=self.incremental
         )
-        return mt, clamp_diff
+        return mt, clamp_diff, cut_sentences
     
     def predict(self, sentences, lengths, mask_next=False):
         with torch.no_grad():
-            mt, _ = self.forward(sentences, lengths, mask_next=mask_next)
+            mt, _, _ = self.forward(sentences, lengths, mask_next=mask_next)
         return self._predict(mt, lengths,)
 
     def _predict(self, mt, lengths):
@@ -163,12 +157,12 @@ class Parser(pl.LightningModule):
             return best_trees
 
     def get_kl(self, sentences, lengths, cutoffs):
-        mt_full, _ = self.forward(
+        mt_full, _, _ = self.forward(
             sentences=sentences,
             lengths=lengths,
             cutoffs=cutoffs
         )
-        mt_masked, _ = self.forward(
+        mt_masked, _, _ = self.forward(
             sentences=sentences,
             lengths=lengths,
             cutoffs=cutoffs,
@@ -197,9 +191,8 @@ class Parser(pl.LightningModule):
         mask = mask.view(batch * num_words)
 
         local = f.cross_entropy(logits[mask], targets[mask], reduction="mean")
-        param_norm = sum(p.norm() ** 2 for p in self.parameters() if p.requires_grad) * self.reg
         clamp_loss = clamp_diff * self.reg
-        loss = local + param_norm + clamp_loss
+        loss = local + clamp_loss
         return loss, clamp_loss, local, 0
 
     def _loss(self, mt, gold_trees, clamp_diff):
@@ -209,10 +202,9 @@ class Parser(pl.LightningModule):
         
         log_probs = (scores - log_partition).double().mean()
         entropy = (log_partition - (marginals * mt.scores).sum((-1, -2))).mean()
-        param_norm = sum(p.norm() ** 2 for p in self.parameters() if p.requires_grad) * self.reg
         clamp_loss = 0
         # clamp_loss = clamp_diff * self.reg
-        loss = -log_probs - self.entropy_reg * entropy + param_norm + clamp_loss
+        loss = -log_probs - self.entropy_reg * entropy + clamp_loss
         return loss, clamp_loss, log_probs, entropy
     
     def configure_optimizers(self):
@@ -220,17 +212,17 @@ class Parser(pl.LightningModule):
         parser_params += list(self.mlp_head.parameters())
         parser_params += list(self.mlp_dep.parameters())
         parser_params += [self.W_pair, self.w_head, self.w_dep, self.bias]
-        llm_params = [p for p in self.embedding_model.parameters() if p.requires_grad]
+        llm_params = [p for p in self.embedding_model.parameters()]
 
-        opt = torch.optim.AdamW(
+        opt = torch.optim.Adam(
             [
                 {"params": parser_params, "lr": self.learning_rate, "weight_decay": 1e-2},
                 {"params": llm_params, "lr": self.learning_rate * 0.01, "weight_decay": 1e-3},
             ],
-            betas=(0.9, 0.9),
+            betas=(0.9, 0.999),
         )
-        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=100)
-        return {"optimizer": opt, "lr_scheduler": {"scheduler": scheduler, "interval": "step"}}
+        scheduler = torch.optim.lr_scheduler.StepLR(opt, step_size=30, gamma=0.5)
+        return {"optimizer": opt, "lr_scheduler": {"scheduler": scheduler, "interval": "epoch"}}
     
     def on_before_optimizer_step(self, optimizer):
         grads = [param.grad.detach().flatten() 
@@ -249,38 +241,57 @@ class Parser(pl.LightningModule):
         lengths = batch["lengths"]        
         gold_trees = gold_trees.to(self.device)
         lengths = lengths.to(self.device)
+        batch_size = lengths.shape[0]
 
-        layer_to_unfreeze = self.llm_output_layer
         if self.global_step > 1000 and self.global_step % 1000 == 0:
-            self.embedding_model.unfreeze_layer(layer_to_unfreeze)
-            layer_to_unfreeze = layer_to_unfreeze - 1
+            self.embedding_model.unfreeze_layer(self.layer_to_unfreeze)
+            self.layer_to_unfreeze = self.layer_to_unfreeze - 1
 
-        mask_next = torch.rand(1).item() < self.mask_next_prob
-        if self.global_step % 500 == 0:
-            mask_next = False # Turn off mask every 500 steps for train metrics
+        slice_trees = torch.rand(1).item() < self.split_trees_prob
 
-        mt, clamp_diff = self.forward(sentences, lengths, clamp=True, mask_next=mask_next)
-        if self.global_step < 200 and self.start_local:
-            loss, clamp_loss, probs, entropy = self._local_loss(mt, gold_trees, clamp_diff, lengths)
+        if slice_trees:
+            mask_next = torch.rand(1).item() < self.mask_next_prob
+            cutoffs = torch.randint(1, lengths.max().item(), size=(batch_size,), device=self.device)
+            cutoffs = cutoffs % (lengths - 1) + 3
+            cutoffs = torch.min(cutoffs, lengths - 1)
+            gold_trees = self.slice_prefix(gold_trees, cutoffs)
+        else:
+            mask_next = False
+            cutoffs = None      
+
+        mt, clamp_diff, _ = self.forward(sentences, lengths, clamp=True, cutoffs=cutoffs, mask_next=mask_next)
+        if self.global_step < self.local_steps:
+            num_words = cutoffs if cutoffs is not None else lengths
+            loss, clamp_loss, probs, entropy = self._local_loss(mt, gold_trees, clamp_diff, num_words)
         else:
             loss, clamp_loss, probs, entropy = self._loss(mt, gold_trees, clamp_diff)
-        self.log('train loss', loss, prog_bar=True)
-        self.log('train entropy', entropy)
-        self.log('train probs', probs)
-        self.log('clamp loss', clamp_loss)
-        self.log('train entropy percent', -entropy / loss)
-        self.log('train probs percent', -probs / loss)
-        self.log('clamp loss percent', clamp_loss / loss)
 
-        # Get train accuracy once per 500 steps
-        if self.global_step % 500 == 0:
-            with torch.no_grad():
-                y_pred = self._predict(mt, lengths)
-            tree_acc, node_acc, _ = self._accuracy(gold_trees, y_pred, lengths)
-            self.log('train acc', tree_acc)
-            self.log('train uas', node_acc, prog_bar=True)
+        log_prefix = 'masked' if mask_next else ''
+        self.log(f'{log_prefix} train loss', loss, prog_bar=True)
+        self.log(f'{log_prefix} train entropy', entropy)
+        self.log(f'{log_prefix} train probs', probs)
+        self.log(f'{log_prefix} clamp loss', clamp_loss)
+        self.log(f'{log_prefix} train entropy percent', -entropy / loss)
+        self.log(f'{log_prefix} train probs percent', -probs / loss)
+        self.log(f'{log_prefix} clamp loss percent', clamp_loss / loss)
+        self.log('epoch', self.current_epoch, on_epoch=True)
+
 
         return loss
+
+    def slice_prefix(self, gold_trees, cutoffs):
+        batch_size, num_words = gold_trees.shape
+        sliced_trees = gold_trees.clone()
+
+        # Mask out nodes beyond cutoff
+        length_mask = torch.arange(num_words, device=self.device)[None, :] > cutoffs[:, None]
+        sliced_trees[length_mask] = 0
+
+        # Set floating nodes to <anchor>
+        floating_nodes = sliced_trees > cutoffs[:, None]
+        sliced_trees[floating_nodes] = 1
+
+        return sliced_trees
     
     def on_validation_start(self):
         self.embedding_model.eval()
@@ -292,8 +303,10 @@ class Parser(pl.LightningModule):
         lengths = batch["lengths"]        
         gold_trees = gold_trees.to(self.device)
         lengths = lengths.to(self.device)
+        batch_size = lengths.shape[0]
 
-        mt, clamp_diff = self.forward(sentences, lengths, clamp=True)
+        # unmasked metrics
+        mt, clamp_diff, _ = self.forward(sentences, lengths, clamp=True)
         loss, _, probs, entropy = self._loss(mt, gold_trees, clamp_diff)
         y_pred = self._predict(mt, lengths)
         tree_acc, node_acc, _ = self._accuracy(gold_trees, y_pred, lengths)
@@ -305,6 +318,25 @@ class Parser(pl.LightningModule):
         self.log('val probs percent', -probs / loss)
         self.log('val acc', tree_acc)
         self.log('val uas', node_acc, prog_bar=True)
+
+        # masked metrics
+        cutoffs = torch.randint(1, lengths.max().item(), size=(batch_size,), device=self.device)
+        cutoffs = cutoffs % (lengths - 1) + 3
+        cutoffs = torch.min(cutoffs, lengths - 1)
+        gold_trees = self.slice_prefix(gold_trees, cutoffs)
+
+        mt, clamp_diff, _ = self.forward(sentences, lengths, cutoffs=cutoffs, mask_next=True, clamp=True)
+        loss, _, probs, entropy = self._loss(mt, gold_trees, clamp_diff)
+        y_pred = self._predict(mt, lengths)
+        tree_acc, node_acc, _ = self._accuracy(gold_trees, y_pred, lengths)
+        self.log('masked val loss', loss, prog_bar=True)
+        self.log('masked val entropy', entropy)
+        self.log('masked val probs', probs)
+        self.log('masked val entropy percent', -entropy / loss)
+        self.log('masked val probs percent', -probs / loss)
+        self.log('masked val acc', tree_acc)
+        self.log('masked val uas', node_acc, prog_bar=True)
+
 
         return loss
     
@@ -323,30 +355,35 @@ class Parser(pl.LightningModule):
             sentences = batch["sentences"]
             gold_trees = batch["gold_trees"]
             lengths = batch["lengths"]
-            cutoffs = batch["cutoffs"]        
+            raw_cutoffs = batch["cutoffs"]        
             gold_trees = gold_trees.to(self.device) if gold_trees is not None else None          
             lengths = lengths.to(self.device)
-            if cutoffs is None:
+            if raw_cutoffs is None:
                 cutoffs = [None for _ in range(len(sentences))]
             else:
-                cutoffs = cutoffs.to(self.device)
+                cutoffs = raw_cutoffs.to(self.device)
 
 
-            mt, clamp_diff = self.forward(
+            mt, clamp_diff, cut_sentences = self.forward(
                 sentences, 
                 lengths, 
                 clamp=True, 
                 cutoffs=cutoffs,
                 mask_next= self.prediction_masknext
             )
-            loss, _, probs, entropy = self._loss(mt, gold_trees, clamp_diff)
             y_pred = self._predict(mt, lengths)
             if gold_trees is not None:
-                tree_acc, node_acc, _ = self._accuracy(gold_trees, y_pred, lengths)
+                if raw_cutoffs is not None:
+                    gold_trees = self.slice_prefix(gold_trees, cutoffs)
+                    effective_lengths = cutoffs + 1
+                else:
+                    effective_lengths = lengths
+                loss, _, probs, entropy = self._loss(mt, gold_trees, clamp_diff)
+                tree_acc, node_acc, _ = self._accuracy(gold_trees, y_pred, effective_lengths)
             else:
-                tree_acc = node_acc = 0
+                tree_acc = node_acc = probs = entropy = 0
 
-            self.test_predictions.extend(zip(sentences, y_pred.cpu().numpy()))
+            self.test_predictions.extend(zip(cut_sentences, y_pred.cpu().numpy()))
             self.cutoffs.extend(cutoffs)
             self.tree_acc += tree_acc
             self.tree_total += 1
@@ -371,7 +408,3 @@ class Parser(pl.LightningModule):
             self.prediction_savepath    
         )
         self.prediction_savepath = None 
-    
-    def setup(self, stage=None):
-        self.embedding_model.to(self.device)
-

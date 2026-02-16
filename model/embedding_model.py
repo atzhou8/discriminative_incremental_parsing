@@ -1,6 +1,6 @@
 import torch
 
-from transformers import AutoTokenizer, AutoModelForCausalLM
+from transformers import AutoTokenizer, AutoModel
 from einops import repeat
 
 class EmbeddingModel(torch.nn.Module):
@@ -11,21 +11,24 @@ class EmbeddingModel(torch.nn.Module):
     def __init__(self, model_name, device, out_layer=-6):
         super().__init__()
         self.device = device
-        self.tokenizer = AutoTokenizer.from_pretrained(model_name)
-        self.model = AutoModelForCausalLM.from_pretrained(
+        self.tokenizer = AutoTokenizer.from_pretrained(model_name, add_prefix_space=True)
+        self.model = AutoModel.from_pretrained(
             model_name,
             use_safetensors=True,
             trust_remote_code=False,
         ).to(device)
 
-        num_layers = len(self.model.transformer.h) + 1
-        abs_hidden_idx = out_layer if out_layer >= 0 else (num_layers + out_layer)
-        layer_to_unfreeze = abs_hidden_idx
-        for name, param in self.model.named_parameters():
-            if 'lnf' in name:
-                param.requires_grad = True
-            else:
-                param.requires_grad = False
+        special_tokens = {'additional_special_tokens': ['<anchor>']}
+        # special_tokens = {'additional_special_tokens': ['<ROOT>', '<ANCHOR>']}
+        self.tokenizer.add_special_tokens(special_tokens)
+        self.model.resize_token_embeddings(len(self.tokenizer))
+
+        # Freeze all parameters by default
+        for param in self.model.parameters():
+            param.requires_grad = False
+
+        for param in self.model.get_input_embeddings().parameters():
+            param.requires_grad = True
 
         self.out_layer = out_layer
         self.config = self.model.config
@@ -34,16 +37,22 @@ class EmbeddingModel(torch.nn.Module):
         if layer < 1:
             return
         for name, param in self.model.named_parameters():
-            if name.startswith('transformer.h.'):
+            if name.startswith('encoder.layer.'): # BERT models
                 try:
-                    block_idx = int(name.split('.')[2])  # transformer.h.{idx}
+                    block_idx = int(name.split('.')[2])
                 except (IndexError, ValueError):
-                    block_idx = None
-                param.requires_grad = (block_idx is not None and block_idx == layer)
-            elif 'lnf' in name:
+                    continue
+                if block_idx == layer:
+                    param.requires_grad = True
+            elif name.startswith('h.'): # GPT2 models
+                try:
+                    block_idx = int(name.split('.')[1])
+                except (IndexError, ValueError):
+                    continue
+                if block_idx == layer:
+                    param.requires_grad = True
+            elif 'LayerNorm' in name and 'encoder' not in name:
                 param.requires_grad = True
-            else:
-                param.requires_grad = False
 
     def to(self, device):
         self.device = device
@@ -67,19 +76,22 @@ class EmbeddingModel(torch.nn.Module):
         tokenization.to(self.device)
         return tokenization
     
-    def get_representations(self, sentences, max_len, cutoffs=None):
+    def get_representations(self, sentences, max_len, cutoffs=None, mask_next=False):
         """Gets embeddings for each node in a UD tree meaning across subword
         units if necessary. Retrieve embeddings from the last transformer layer
         by default.
 
-        TODO: run hyperparam search on layer, but seems like any of the 
-        mid-layers are about the same
         """
         # Cutoff sentences for incremental parsing
-        if cutoffs is not None:
-            sentences = [sentence[:cutoff] for sentence, cutoff in zip(sentences, cutoffs)] 
+        cut_sentences = []
+        for i, sentence in enumerate(sentences):
+            if cutoffs is not None:
+                sentence = sentence[:cutoffs[i]]
+            if mask_next:
+                sentence[-1] = '<mask>'
+            cut_sentences.append(sentence)
 
-        tokenization = self.get_tokenization(sentences, max_len)
+        tokenization = self.get_tokenization(cut_sentences, max_len)
         # with torch.inference_mode():
         embeddings = self.model(
             **tokenization,
@@ -88,7 +100,7 @@ class EmbeddingModel(torch.nn.Module):
 
         # Strip BOS/EOS and combine subwords by meaning across word id
         assert max_len >= len(tokenization.word_ids(0))
-        batch_size = len(sentences)
+        batch_size = len(cut_sentences)
         num_words = max_len
         embedding_dim = self.model.config.hidden_size
 
@@ -124,6 +136,7 @@ class EmbeddingModel(torch.nn.Module):
         mask = repeat(counts != 0, 'b n -> b n d', d=embedding_dim)
         embeddings_cleaned = embeddings_cleaned / denom
         embeddings_cleaned = embeddings_cleaned * mask
+        embeddings_cleaned[:, 0, :] = embeddings[:, 0, :] # splice <s> into root 
 
-        return embeddings_cleaned
+        return embeddings_cleaned, cut_sentences
         

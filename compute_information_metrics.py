@@ -29,6 +29,7 @@ if __name__ == "__main__":
     )
     parser.add_argument('-k', '--get_k_after_cp', type=int, default=2)
     parser.add_argument("--batch-size", type=int, default=32)
+    parser.add_argument('--ckpt', default='val')
     args = parser.parse_args()
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     if args.output_dir is None:
@@ -37,9 +38,14 @@ if __name__ == "__main__":
         output_dir = args.output_dir
 
     # Restore model + its hyperparameters from checkpoint
+    assert args.ckpt in ['val', 'mask', 'last']
+
     ckpt_dir = Path('lightning_logs') / args.name / f'version_{args.version}' / 'checkpoints'
-    print(ckpt_dir)
-    best_ckpt = next(ckpt_dir.glob("best_epoch=*.ckpt"))
+    if args.ckpt == 'last':
+        best_ckpt = ckpt_dir / 'last.ckpt'
+    else:
+        best_ckpt = next(ckpt_dir.glob(f'best_{args.ckpt}_epoch=*.ckpt'))
+    print(f'Predicting from {best_ckpt}')
     model = Parser.load_from_checkpoint(
         best_ckpt,
     )
@@ -56,11 +62,9 @@ if __name__ == "__main__":
     df = {
         'condition': [],
         'sentence': [],
+        'cp': []
     }
-    for k in range(1, args.get_k_after_cp+1):
-        df[f'kl-{k}'] = []
-    df['kl'] = []
-    for k in range(1, args.get_k_after_cp+1):
+    for k in range(0, args.get_k_after_cp+1):
         df[f'kl+{k}'] = []
 
     for batch in loader:
@@ -74,14 +78,12 @@ if __name__ == "__main__":
         kl = model.get_kl(sentences, lengths, cutoffs)
         kl = kl.detach().cpu().numpy()
         df['kl'].extend(kl)
+        df['cp'].extend(cutoffs.tolist())
 
         for k in range(1, args.get_k_after_cp+1):
             kl = model.get_kl(sentences, lengths, cutoffs+k)
             kl = kl.detach().cpu().numpy()
             df[f'kl+{k}'].extend(kl)
-            kl = model.get_kl(sentences, lengths, cutoffs-k)
-            kl = kl.detach().cpu().numpy()
-            df[f'kl-{k}'].extend(kl)
 
         sentences = [' '.join(sentence) for sentence in sentences]
         df['condition'].extend(conditions)
