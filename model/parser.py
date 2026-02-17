@@ -194,6 +194,8 @@ class Parser(pl.LightningModule):
     def _local_loss(self, mt, gold_trees, clamp_diff, lengths):
         batch, num_words, _ = mt.scores.shape
         logits = mt.scores
+        log_partition = mt.log_partition
+        marginals = mt.marginals
         mask = torch.arange(num_words, device=self.device)[None, :] < lengths[:, None]
         
         logits = logits.view(batch * num_words, num_words)
