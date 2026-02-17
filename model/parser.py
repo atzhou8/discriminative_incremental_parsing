@@ -169,6 +169,16 @@ class Parser(pl.LightningModule):
             mask_next=True,
         )
         return mt_full.kl(mt_masked)
+
+    def get_perplexity(self, sentences, lengths, cutoffs, mask_next=False):
+        mt, _, _ = self.forward(
+            sentences=sentences,
+            lengths=lengths,
+            cutoffs=cutoffs,
+            mask_next=mask_next
+        )
+
+        return torch.exp(mt.entropy)
   
     def _accuracy(self, y, y_pred, lengths):
         mask = torch.arange(y_pred.shape[1], device=self.device)[None, :] < lengths[:, None]
@@ -191,9 +201,10 @@ class Parser(pl.LightningModule):
         mask = mask.view(batch * num_words)
 
         local = f.cross_entropy(logits[mask], targets[mask], reduction="mean")
+        entropy = (log_partition - (marginals * mt.scores).sum((-1, -2))).mean()
         clamp_loss = clamp_diff * self.reg
-        loss = local + clamp_loss
-        return loss, clamp_loss, local, 0
+        loss = local + clamp_loss - self.entropy_reg * entropy
+        return loss, clamp_loss, local, entropy
 
     def _loss(self, mt, gold_trees, clamp_diff):
         log_partition = mt.log_partition

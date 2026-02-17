@@ -29,7 +29,7 @@ if __name__ == "__main__":
     )
     parser.add_argument('-k', '--get_k_after_cp', type=int, default=2)
     parser.add_argument("--batch-size", type=int, default=32)
-    parser.add_argument('--ckpt', default='val')
+    parser.add_argument('--ckpt', default='last')
     args = parser.parse_args()
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     if args.output_dir is None:
@@ -66,6 +66,9 @@ if __name__ == "__main__":
     }
     for k in range(0, args.get_k_after_cp+1):
         df[f'kl+{k}'] = []
+        df[f'perp_mask+{k}'] = []
+        df[f'perp_unmask+{k}'] = []
+
 
     for batch in loader:
         sentences = batch['sentences']
@@ -75,15 +78,27 @@ if __name__ == "__main__":
         lengths = lengths.to(device)
         cutoffs = cutoffs.to(device)
        
-        kl = model.get_kl(sentences, lengths, cutoffs)
-        kl = kl.detach().cpu().numpy()
-        df['kl'].extend(kl)
         df['cp'].extend(cutoffs.tolist())
 
-        for k in range(1, args.get_k_after_cp+1):
+        for k in range(0, args.get_k_after_cp+1):
             kl = model.get_kl(sentences, lengths, cutoffs+k)
             kl = kl.detach().cpu().numpy()
+            perp_unmask = model.get_perplexity(
+                sentences, 
+                lengths, 
+                cutoffs+k, 
+                mask_next=False
+            ).detach().cpu().numpy()
+            perp_mask = model.get_perplexity(
+                sentences, 
+                lengths, 
+                cutoffs+k, 
+                mask_next=True
+            ).detach().cpu().numpy()
+
             df[f'kl+{k}'].extend(kl)
+            df[f'perp_mask+{k}'].extend(perp_unmask)
+            df[f'perp_unmask+{k}'].extend(perp_mask)
 
         sentences = [' '.join(sentence) for sentence in sentences]
         df['condition'].extend(conditions)
