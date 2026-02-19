@@ -28,7 +28,9 @@ class TreebankDataset(Dataset):
 
         return words, tree, length
 
-def treebank_collater(batch):
+def treebank_collater(batch, cutoff_transform=None):
+    if cutoff_transform is None:
+        cutoff_transform = lambda x: x
     sentences, trees, lengths = zip(*batch)
     trees = pad_sequence(list(trees), batch_first=True, padding_value=0).long()
     lengths = torch.tensor(list(lengths), dtype=torch.int64)
@@ -37,7 +39,7 @@ def treebank_collater(batch):
         'sentences': list(sentences), 
         'gold_trees': trees, 
         'lengths': lengths,
-        'cutoffs': None,
+        'cutoffs': cutoff_transform(None),
         'conditions': None,
     }
 

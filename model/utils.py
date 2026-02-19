@@ -46,7 +46,7 @@ def build_loader(
     assert dataset_type in ['treebank', 'phenomena'], \
           "Dataset type must be either treebank or phenomena"
     D = TreebankDataset if dataset_type=='treebank' else PhenomenaDataset
-    col_fn = treebank_collater if dataset_type=='treebank' \
+    col_fn = lambda x: treebank_collater(x, cutoff_fn) if dataset_type=='treebank' \
              else lambda x: phenomena_collater(x, cutoff_fn)
 
     return DataLoader(

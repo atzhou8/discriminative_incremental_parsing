@@ -1,5 +1,7 @@
 import argparse
 import torch
+import pandas as pd
+
 from pathlib import Path
 
 from pytorch_lightning import Trainer
@@ -13,14 +15,19 @@ torch.set_float32_matmul_precision('medium')
 def make_cutoff_transform(spec):
     if spec == 'none' or spec is None:
         return lambda x: None
-    elif spec == 'identity':
-        return lambda x: x
-    elif spec.startswith('shift:'):
-        k = int(spec.split(':')[1])
-        return lambda x: x + k
     elif spec.startswith('const:'):
         k = int(spec.split(':')[1])
         return lambda x: k * torch.ones_like(x)
+    elif spec.startswith('file+1:'):
+        cutoff_dir = spec.split(':')[1]
+        df = pd.read_csv(cutoff_dir)
+        cutoffs = df['critical_pos'].tolist()
+        return lambda x: torch.tensor(cutoffs, dtype=torch.long)+1
+    elif spec.startswith('file:'):
+        cutoff_dir = spec.split(':')[1]
+        df = pd.read_csv(cutoff_dir)
+        cutoffs = df['critical_pos'].tolist()
+        return lambda x: torch.tensor(cutoffs, dtype=torch.long)
     else:
         raise ValueError('Invalid specification for cutoffs')
 
@@ -49,7 +56,7 @@ if __name__ == "__main__":
         '--mask_next',
         action='store_true',
     )
-    parser.add_argument("--batch-size", type=int, default=256)
+    parser.add_argument("--batch-size", type=int, default=72)
     args = parser.parse_args()
     assert args.ckpt in ['val', 'mask', 'last']
 
