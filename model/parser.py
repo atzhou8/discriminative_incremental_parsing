@@ -168,7 +168,7 @@ class Parser(pl.LightningModule):
             cutoffs=cutoffs,
             mask_next=True,
         )
-        return mt_full.kl(mt_masked)
+        return mt_masked.kl(mt_full)
 
     def get_perplexity(self, sentences, lengths, cutoffs, mask_next=False):
         mt, _, _ = self.forward(
