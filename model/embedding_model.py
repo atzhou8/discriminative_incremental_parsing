@@ -86,9 +86,10 @@ class EmbeddingModel(torch.nn.Module):
         cut_sentences = []
         for i, sentence in enumerate(sentences):
             if cutoffs is not None:
-                sentence = sentence[:cutoffs[i]]
-            if mask_next:
-                sentence[-1] = '<mask>'
+                cutoff = int(cutoffs[i].item()) if torch.is_tensor(cutoffs[i]) else int(cutoffs[i])
+                cutoff = max(0, min(cutoff, len(sentence)))
+                num_to_mask = len(sentence) - cutoff
+                sentence[cutoff:] = ['<mask>'] * num_to_mask
             cut_sentences.append(sentence)
 
         tokenization = self.get_tokenization(cut_sentences, max_len)

@@ -2,6 +2,7 @@ import supar
 import torch
 import torch.nn.functional as f
 import pytorch_lightning as pl
+import numpy as np
 
 from einops import einsum, rearrange, repeat
 from supar.structs.tree import MatrixTree
@@ -135,11 +136,10 @@ class Parser(pl.LightningModule):
         else:
             clamp_diff = 0
 
-        if cutoffs is not None and cutoffs[0] is not None:
-            lengths = cutoffs + 1
+
         mt = MatrixTree(
             scores=edge_scores, 
-            lens=lengths-1, 
+            lens=lengths-1, # -1 to ignore root 
             multiroot=self.incremental
         )
         return mt, clamp_diff, cut_sentences
@@ -160,13 +160,14 @@ class Parser(pl.LightningModule):
         mt_full, _, _ = self.forward(
             sentences=sentences,
             lengths=lengths,
-            cutoffs=cutoffs
+            cutoffs=cutoffs+1,
+            mask_next=False,
         )
         mt_masked, _, _ = self.forward(
             sentences=sentences,
             lengths=lengths,
             cutoffs=cutoffs,
-            mask_next=True,
+            mask_next=False,
         )
         return mt_masked.kl(mt_full)
 
@@ -265,9 +266,8 @@ class Parser(pl.LightningModule):
         if slice_trees:
             mask_next = torch.rand(1).item() < self.mask_next_prob
             cutoffs = torch.randint(1, lengths.max().item(), size=(batch_size,), device=self.device)
-            cutoffs = cutoffs % (lengths - 1) + 3
-            cutoffs = torch.min(cutoffs, lengths - 1)
-            gold_trees = self.slice_prefix(gold_trees, cutoffs)
+            cutoffs = (cutoffs % (lengths - 1)) + 3
+            # gold_trees = self.slice_prefix(gold_trees, cutoffs)
         else:
             mask_next = False
             cutoffs = None      
@@ -301,7 +301,7 @@ class Parser(pl.LightningModule):
         sliced_trees[length_mask] = 0
 
         # Set floating nodes to <anchor>
-        floating_nodes = sliced_trees > cutoffs[:, None]
+        floating_nodes = sliced_trees > cutoffs[:, None] 
         sliced_trees[floating_nodes] = 1
 
         return sliced_trees
@@ -333,10 +333,11 @@ class Parser(pl.LightningModule):
         self.log('val uas', node_acc, prog_bar=True)
 
         # masked metrics
+        mask_next = torch.rand(1).item() < self.mask_next_prob
         cutoffs = torch.randint(1, lengths.max().item(), size=(batch_size,), device=self.device)
-        cutoffs = cutoffs % (lengths - 1) + 3
-        cutoffs = torch.min(cutoffs, lengths - 1)
-        gold_trees = self.slice_prefix(gold_trees, cutoffs)
+        cutoffs = cutoffs % (lengths - 1) + 3 # add 3 to avoid nontrivial trees
+        cutoffs = torch.min(cutoffs, lengths - 1) # avoid cutoff at end
+        # gold_trees = self.slice_prefix(gold_trees, cutoffs)
 
         mt, clamp_diff, _ = self.forward(sentences, lengths, cutoffs=cutoffs, mask_next=True, clamp=True)
         loss, _, probs, entropy = self._loss(mt, gold_trees, clamp_diff)
@@ -358,7 +359,10 @@ class Parser(pl.LightningModule):
         self.eval()
         self.test_predictions = []
         self.cutoffs = []
+        self.true_signature = []
         self.node_acc = self.node_total = self.tree_acc = self.tree_total = self.probs = 0
+        # track sentences (or examples) that were predicted entirely correctly
+        self.correct_examples = []
 
     def set_prediction_save_path(self, dir):
         self.prediction_savepath = dir
@@ -368,14 +372,13 @@ class Parser(pl.LightningModule):
             sentences = batch["sentences"]
             gold_trees = batch["gold_trees"]
             lengths = batch["lengths"]
-            raw_cutoffs = batch["cutoffs"]        
+            raw_cutoffs = batch["cutoffs"]
             gold_trees = gold_trees.to(self.device) if gold_trees is not None else None          
             lengths = lengths.to(self.device)
             if raw_cutoffs is None:
                 cutoffs = [None for _ in range(len(sentences))]
             else:
                 cutoffs = raw_cutoffs.to(self.device)
-
 
             mt, clamp_diff, cut_sentences = self.forward(
                 sentences, 
@@ -386,13 +389,30 @@ class Parser(pl.LightningModule):
             )
             y_pred = self._predict(mt, lengths)
             if gold_trees is not None:
-                if raw_cutoffs is not None:
-                    gold_trees = self.slice_prefix(gold_trees, cutoffs)
-                    effective_lengths = cutoffs + 1
-                else:
-                    effective_lengths = lengths
+                # compute loss/metrics
                 loss, _, probs, entropy = self._loss(mt, gold_trees, clamp_diff)
-                tree_acc, node_acc, _ = self._accuracy(gold_trees, y_pred, effective_lengths)
+                lengths = cutoffs if cutoffs[0] is not None else lengths
+                tree_acc, node_acc, _ = self._accuracy(gold_trees, y_pred, lengths)
+                # compute per-example correctness and record the sentence for correct ones
+                try:
+                    # ensure numpy arrays for comparison
+                    if isinstance(y_pred, np.ndarray):
+                        y_np = y_pred
+                    else:
+                        y_np = y_pred.cpu().numpy()
+                    g_np = gold_trees.cpu().numpy()
+                    lengths_np = lengths.cpu().numpy()
+                    for i in range(y_np.shape[0]):
+                        n = y_np.shape[1]
+                        mask = np.arange(n) < lengths_np[i]
+                        equal_mask = (y_np[i] == g_np[i]) | (~mask)
+                        if equal_mask.all():
+                            # store the (possibly cut) sentence text
+                            self.correct_examples.append(1)
+                        else:
+                            self.correct_examples.append(0)
+                except Exception:
+                    pass
             else:
                 tree_acc = node_acc = probs = entropy = 0
 
@@ -410,6 +430,7 @@ class Parser(pl.LightningModule):
     def on_test_end(self):
         tree_acc = self.tree_acc / self.tree_total
         node_acc = self.node_acc / self.node_total
+        # print list of correct test examples
         stat_string = f'acc={tree_acc:.4f}_uas={node_acc:.4f}'
         if self.prediction_savepath is None:
             save_path = self.logger.log_dir + f'/predictions_{stat_string}.conllu' # type: ignore

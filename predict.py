@@ -1,7 +1,6 @@
 import argparse
 import torch
 import pandas as pd
-
 from pathlib import Path
 
 from pytorch_lightning import Trainer
@@ -11,6 +10,7 @@ from model.parser import Parser
 from model.utils import build_loader
 
 torch.set_float32_matmul_precision('medium')
+
 
 def make_cutoff_transform(spec):
     if spec == 'none' or spec is None:
@@ -51,10 +51,11 @@ if __name__ == "__main__":
         '--cutoff_transform',
         default='none',
     )
+
     parser.add_argument(
         '-m',
         '--mask_next',
-        action='store_true',
+        action='store_true'
     )
     parser.add_argument("--batch-size", type=int, default=72)
     args = parser.parse_args()
@@ -76,7 +77,7 @@ if __name__ == "__main__":
         args.batch_size,
         num_workers=0,
         dataset_type=args.dataset_type,
-        cutoff_fn=make_cutoff_transform(args.cutoff_transform)
+        cutoff_fn=make_cutoff_transform(args.cutoff_transform),
     )
 
     logger = TensorBoardLogger(
