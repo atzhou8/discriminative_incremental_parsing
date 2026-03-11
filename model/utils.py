@@ -109,6 +109,15 @@ def recovered_dist_like(dist, gold_trees, cutoffs, temp=5):
         multiroot=dist.multiroot
     )
 
+def weighted_root_dist_like(dist, scale_factor=5):
+    scores = dist.scores.clone()
+    scores[:, :, 0] *= scale_factor # b * d * h
+    return MatrixTree(
+        scores=scores,
+        lens=dist.lens,
+        multiroot=dist.multiroot
+    )
+
 def get_info_metrics(dist_before, dist_after):
     assert (dist_before.lens == dist_after.lens).all()
     renyi_alphas = [2, 3, 5]
@@ -136,6 +145,9 @@ def get_info_metrics(dist_before, dist_after):
     metrics['kl_forward'] = dist_before.kl(dist_after).detach().cpu().numpy()
     metrics['kl_backward'] = dist_after.kl(dist_before).detach().cpu().numpy()
     metrics['kl_symmetric'] = 0.5 * (metrics['kl_forward'] + metrics['kl_backward'])
+    dist_before_rootshift = weighted_root_dist_like(dist_before)
+    dist_after_rootshift = weighted_root_dist_like(dist_after)
+    metrics['kl_root_shifted'] = dist_before_rootshift.kl(dist_after_rootshift)
     dist_mix = MatrixTree(
         scores=dist_before.scores + dist_after.scores,
         lens=dist_before.lens,

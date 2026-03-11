@@ -15,18 +15,19 @@ torch.set_float32_matmul_precision('medium')
 
 def _get_info_metric_names():
     names = [
-        'entropy_before',
-        'entropy_after',
-        'entropy_reduction',
-        'entropy_change',
-        'cross_entropy_forward',
-        'cross_entropy_backward',
+        # 'entropy_before',
+        # 'entropy_after',
+        # 'entropy_reduction',
+        # 'entropy_change',
         'kl_forward',
+        'kl_root_shifted',
         'kl_backward',
         'kl_symmetric',
         'js_geo',
+        'cross_entropy_forward',
+        'cross_entropy_backward',
     ]
-    for alpha in [2, 3, 5]:
+    for alpha in [5]:
         names.extend(
             [
                 f'entropy_before_renyi_{alpha}',
