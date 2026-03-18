@@ -22,7 +22,7 @@ class Parser(pl.LightningModule):
         emb_dropout,
         mlp_dropout,
         entropy_reg,
-        incremental,
+        multiroot,
         llm_output_layer,
         mask_next_prob,
         split_trees_prob, 
@@ -67,7 +67,7 @@ class Parser(pl.LightningModule):
         self.mlp_dropout = mlp_dropout
         self.emb_dropout = emb_dropout
         self.entropy_reg = entropy_reg
-        self.incremental = incremental
+        self.multiroot = multiroot
         self.mask_next_prob = mask_next_prob
         self.split_trees_prob = split_trees_prob
         self.local_steps = local_steps
@@ -120,10 +120,6 @@ class Parser(pl.LightningModule):
         dep_scores = rearrange(dep_scores, 'b n -> b 1 n')
         edge_scores = paired + head_scores + dep_scores + self.bias
 
-        # Shift columns for stability
-        # column_max = torch.max(edge_scores, dim=-1, keepdim=True)[0]
-        # edge_scores = edge_scores - column_max
-
         # Clamp during training
         if clamp:
             edge_scores_clipped = edge_scores.clamp(
@@ -140,7 +136,7 @@ class Parser(pl.LightningModule):
         mt = MatrixTree(
             scores=edge_scores, 
             lens=lengths-1, # -1 to ignore root 
-            multiroot=self.incremental
+            multiroot=self.multiroot
         )
         return mt, clamp_diff, cut_sentences
     
@@ -152,34 +148,9 @@ class Parser(pl.LightningModule):
     def _predict(self, mt, lengths):
         with torch.no_grad():
             scores = mt.scores.detach().clone()
-            best_trees = mst(scores, mt.mask, multiroot=self.incremental) # type: ignore
+            best_trees = mst(scores, mt.mask, multiroot=self.multiroot) # type: ignore
 
             return best_trees
-
-    def get_kl(self, sentences, lengths, cutoffs):
-        mt_full, _, _ = self.forward(
-            sentences=sentences,
-            lengths=lengths,
-            cutoffs=cutoffs+1,
-            mask_next=False,
-        )
-        mt_masked, _, _ = self.forward(
-            sentences=sentences,
-            lengths=lengths,
-            cutoffs=cutoffs,
-            mask_next=False,
-        )
-        return mt_masked.kl(mt_full)
-
-    def get_perplexity(self, sentences, lengths, cutoffs, mask_next=False):
-        mt, _, _ = self.forward(
-            sentences=sentences,
-            lengths=lengths,
-            cutoffs=cutoffs,
-            mask_next=mask_next
-        )
-
-        return torch.exp(mt.entropy)
   
     def _accuracy(self, y, y_pred, lengths):
         mask = torch.arange(y_pred.shape[1], device=self.device)[None, :] < lengths[:, None]

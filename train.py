@@ -32,7 +32,7 @@ parser.add_argument('-val', '--val_dir',
                     default=en_dev)
 parser.add_argument('-e', '--embedding_model',
                     default=en_llm)
-parser.add_argument('-inc', '--incremental', action='store_true')
+parser.add_argument('-mr', '--multiroot', action='store_true')
 parser.add_argument('-l', '--llm_layer', type=int, default=7)
 parser.add_argument('-dim', '--embedding_dim', type=int, default=512)
 parser.add_argument('-r', '--regularization', type=float, default=1e-2)
@@ -56,7 +56,7 @@ if __name__ == '__main__':
 
     model = Parser(
         embedding_model_name=args.embedding_model,
-        incremental=args.incremental,
+        multiroot=args.multiroot,
         reg=args.regularization,
         potential_clamp=args.clamp, 
         learning_rate=args.learning_rate,

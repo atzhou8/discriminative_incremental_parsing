@@ -60,12 +60,12 @@ def build_loader(
     )
 
 def renyi_entropy(dist, alpha):
-    lp = dist.log_partition
+    lp = dist.log_partition.detach().cpu().numpy()
     alpha_lp = MatrixTree(
         dist.scores * alpha,
         dist.lens,
         dist.multiroot
-    ).log_partition
+    ).log_partition.detach().cpu().numpy()
 
     return (alpha_lp - alpha * lp) /(1-alpha)
 
@@ -80,7 +80,7 @@ def renyi_divergence(dist_before, dist_after, alpha):
 
     renyi_divergence = (lp_mixed - alpha*lp_before - (1-alpha)*lp_after) / (alpha-1)
 
-    return renyi_divergence
+    return renyi_divergence.detach().cpu().numpy()
 
 def uniform_dist_like(dist):
     return MatrixTree(
@@ -140,8 +140,8 @@ def get_info_metrics(dist_before, dist_after):
     metrics['entropy_change'] = np.abs(metrics['entropy_reduction'])
     # metrics['perplexity_before'] = np.exp(metrics['entropy_before'])
     # metrics['perplexity_after'] = np.exp(metrics['entropy_after'])
-    metrics['cross_entropy_forward'] = dist_before.cross_entropy(dist_after)
-    metrics['cross_entropy_backward'] = dist_after.cross_entropy(dist_before)
+    metrics['cross_entropy_forward'] = dist_before.cross_entropy(dist_after).detach().cpu().numpy()
+    metrics['cross_entropy_backward'] = dist_after.cross_entropy(dist_before).detach().cpu().numpy()
     metrics['kl_forward'] = dist_before.kl(dist_after).detach().cpu().numpy()
     metrics['kl_backward'] = dist_after.kl(dist_before).detach().cpu().numpy()
     metrics['kl_symmetric'] = 0.5 * (metrics['kl_forward'] + metrics['kl_backward'])
