@@ -140,7 +140,7 @@ def load_gold_trees(word_rows, gold_path):
 
     for index, row in word_rows.iterrows():
         if row['ambiguity'] == 'ambiguous':
-            sentence_index = row['sentence_index']
+            sentence_index = row['SentenceIndex']
             word_rows.at[index, 'GoldTree'] = trees[sentence_index]
 
 def get_batch_from_word_rows(word_rows, id_start, id_end, device):
