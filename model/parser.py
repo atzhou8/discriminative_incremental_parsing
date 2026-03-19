@@ -22,7 +22,7 @@ class Parser(pl.LightningModule):
         emb_dropout,
         mlp_dropout,
         entropy_reg,
-        multiroot,
+        incremental,
         llm_output_layer,
         mask_next_prob,
         split_trees_prob, 
@@ -67,7 +67,7 @@ class Parser(pl.LightningModule):
         self.mlp_dropout = mlp_dropout
         self.emb_dropout = emb_dropout
         self.entropy_reg = entropy_reg
-        self.multiroot = multiroot
+        self.multiroot = incremental
         self.mask_next_prob = mask_next_prob
         self.split_trees_prob = split_trees_prob
         self.local_steps = local_steps

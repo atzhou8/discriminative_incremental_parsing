@@ -56,7 +56,7 @@ if __name__ == '__main__':
 
     model = Parser(
         embedding_model_name=args.embedding_model,
-        multiroot=args.multiroot,
+        incremental=args.multiroot,
         reg=args.regularization,
         potential_clamp=args.clamp, 
         learning_rate=args.learning_rate,

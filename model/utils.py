@@ -99,7 +99,7 @@ def recovered_dist_like(dist, gold_trees, cutoffs, temp=5):
         batch_cutoff = cutoffs[batch_idx]
         scores[batch_idx, :batch_cutoff+1, :batch_cutoff+1] = -temp
         for dep in range(1, sentence_len):
-            head = int(tree[dep - 1])
+            head = int(tree[dep])
             if head <= batch_cutoff and dep <= batch_cutoff:
                 scores[batch_idx, dep, head] = float(temp)
 
@@ -145,9 +145,9 @@ def get_info_metrics(dist_before, dist_after):
     metrics['kl_forward'] = dist_before.kl(dist_after).detach().cpu().numpy()
     metrics['kl_backward'] = dist_after.kl(dist_before).detach().cpu().numpy()
     metrics['kl_symmetric'] = 0.5 * (metrics['kl_forward'] + metrics['kl_backward'])
-    dist_before_rootshift = weighted_root_dist_like(dist_before)
-    dist_after_rootshift = weighted_root_dist_like(dist_after)
-    metrics['kl_root_shifted'] = dist_before_rootshift.kl(dist_after_rootshift)
+    # dist_before_rootshift = weighted_root_dist_like(dist_before)
+    # dist_after_rootshift = weighted_root_dist_like(dist_after)
+    # metrics['kl_root_shifted'] = dist_before_rootshift.kl(dist_after_rootshift)
     dist_mix = MatrixTree(
         scores=dist_before.scores + dist_after.scores,
         lens=dist_before.lens,
