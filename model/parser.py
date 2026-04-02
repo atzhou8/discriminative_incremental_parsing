@@ -24,10 +24,10 @@ class Parser(pl.LightningModule):
         entropy_reg,
         incremental,
         llm_output_layer,
-        mask_next_prob,
         split_trees_prob, 
         embedding_dim=None,
         local_steps=0,
+        predict_adjunct=False,
     ):
         super(Parser, self).__init__()
         self.embedding_model = EmbeddingModel(
@@ -53,19 +53,22 @@ class Parser(pl.LightningModule):
             torch.nn.ReLU(),
             torch.nn.Dropout(mlp_dropout),
         )
-        self.W_pair = torch.nn.Parameter(torch.empty(self.embedding_dim, self.embedding_dim))
+        self.W_pair = torch.nn.Parameter(
+            torch.empty(self.embedding_dim, self.embedding_dim)
+        )
         self.w_head = torch.nn.Parameter(torch.zeros(self.embedding_dim))
         self.w_dep = torch.nn.Parameter(torch.zeros(self.embedding_dim))
         self.bias = torch.nn.Parameter(torch.zeros(1))
         torch.nn.init.xavier_uniform_(self.W_pair)
 
         # adjunct prediction params
-        self.mlp_adj = torch.nn.Sequential(
-            torch.nn.Linear(self.llm_dim, self.embedding_dim),
-            torch.nn.ReLU(),
-            torch.nn.Dropout(mlp_dropout),
-            torch.nn.Linear(self.embedding_dim, 1)
-        )
+        if predict_adjunct:
+            self.mlp_adj = torch.nn.Sequential(
+                torch.nn.Linear(self.llm_dim, self.embedding_dim),
+                torch.nn.ReLU(),
+                torch.nn.Dropout(mlp_dropout),
+                torch.nn.Linear(self.embedding_dim, 1)
+            )
 
         # save hyperparams
         self.embedding_model_name = embedding_model_name
@@ -77,14 +80,13 @@ class Parser(pl.LightningModule):
         self.emb_dropout = emb_dropout
         self.entropy_reg = entropy_reg
         self.multiroot = incremental
-        self.mask_next_prob = mask_next_prob
         self.split_trees_prob = split_trees_prob
         self.local_steps = local_steps
+        self.predict_adjunct = predict_adjunct
         self.save_hyperparameters()
 
         # path to save predictions
         self.prediction_savepath = None
-        self.prediction_masknext = False
         self.layer_to_unfreeze = llm_output_layer
 
     def forward(
@@ -92,8 +94,7 @@ class Parser(pl.LightningModule):
         sentences, 
         lengths, 
         clamp=False, 
-        cutoffs=None, 
-        mask_next=False
+        cutoffs=None,
     ):
         """Get score for edge (i, j) as: 
                 
@@ -110,19 +111,22 @@ class Parser(pl.LightningModule):
             sentences=sentences,
             max_len=max(lengths),
             cutoffs=cutoffs,
-            mask_next=mask_next,
         )
         embeddings = self.embedding_drop(embeddings)
         
         # adjunct prediction
         is_adjunct = None
-        if cutoffs is not None:
-            batch_indices = torch.arange(batch_size, device=embeddings.device)
-            next_positions = cutoffs
-            in_bounds = next_positions < embeddings.shape[1]
-            tokens_to_predict = embeddings[batch_indices[in_bounds], next_positions[in_bounds]]
-            is_adjunct = torch.zeros(batch_size, 1, device=embeddings.device)
-            is_adjunct[in_bounds] = self.mlp_adj(tokens_to_predict).to(is_adjunct.dtype)
+        if self.predict_adjunct:
+            if cutoffs is not None:
+                batch_indices = torch.arange(batch_size, device=embeddings.device)
+                next_positions = cutoffs
+                in_bounds = next_positions < embeddings.shape[1]
+                tokens_to_predict = embeddings[
+                    batch_indices[in_bounds], 
+                    next_positions[in_bounds]
+                ]
+                is_adjunct = torch.zeros(batch_size, 1, device=embeddings.device)
+                is_adjunct[in_bounds] = self.mlp_adj(tokens_to_predict).to(is_adjunct.dtype)
          
         # parser
         head_repr = self.mlp_head(embeddings)  # (b, n, d)
@@ -160,9 +164,9 @@ class Parser(pl.LightningModule):
         )
         return mt, clamp_diff, cut_sentences, is_adjunct
     
-    def predict(self, sentences, lengths, mask_next=False):
+    def predict(self, sentences, lengths):
         with torch.no_grad():
-            mt, _, _, _ = self.forward(sentences, lengths, mask_next=mask_next)
+            mt, _, _, _ = self.forward(sentences, lengths)
         return self._predict(mt, lengths,)
 
     def _predict(self, mt, lengths):
@@ -233,6 +237,8 @@ class Parser(pl.LightningModule):
         parser_params = []
         parser_params += list(self.mlp_head.parameters())
         parser_params += list(self.mlp_dep.parameters())
+        if self.predict_adjunct:
+            parser_params += list(self.mlp_adj.parameters())
         parser_params += [self.W_pair, self.w_head, self.w_dep, self.bias]
         llm_params = [p for p in self.embedding_model.parameters()]
 
@@ -261,7 +267,7 @@ class Parser(pl.LightningModule):
         sentences = batch["sentences"]
         gold_trees = batch["gold_trees"]
         lengths = batch["lengths"]   
-        gold_adjuncts = batch["gold_adjuncts"]
+        gold_adjuncts = batch.get("gold_adjuncts")
         cutoffs = batch["cutoffs"]     
         gold_trees = gold_trees.to(self.device)
         lengths = lengths.to(self.device)
@@ -273,30 +279,43 @@ class Parser(pl.LightningModule):
 
         slice_trees = torch.rand(1).item() < self.split_trees_prob
         if slice_trees:
-            mask_next = torch.rand(1).item() < self.mask_next_prob
             cutoffs = torch.randint(1, lengths.max().item(), size=(batch_size,), device=self.device)
             cutoffs = torch.minimum((cutoffs % (lengths - 4).clamp_min(1)) + 3, lengths - 2)
             # gold_trees = self.slice_prefix(gold_trees, cutoffs)
         else:
-            mask_next = False
             cutoffs = None      
 
-        mt, clamp_diff, _, is_adjunct = self.forward(sentences, lengths, clamp=True, cutoffs=cutoffs, mask_next=mask_next)
+        mt, clamp_diff, _, is_adjunct = self.forward(
+            sentences, 
+            lengths, 
+            clamp=True, 
+            cutoffs=cutoffs
+        )
         adjunct_loss = 0
-        adjunct_acc = 0
-        if gold_adjuncts is not None and cutoffs is not None:
+        adjunct_acc = None
+        if self.predict_adjunct and gold_adjuncts is not None 
+        and cutoffs is not None and is_adjunct is not None:
             batch_indices = torch.arange(batch_size, device=self.device)
             adjunct_labels = gold_adjuncts[batch_indices, cutoffs]
             adjunct_loss = self._adjunct_loss(is_adjunct, adjunct_labels)
             adjunct_acc = self._adjunct_accuracy(is_adjunct, adjunct_labels)
         if self.global_step < self.local_steps:
             num_words = cutoffs if cutoffs is not None else lengths
-            loss, clamp_loss, probs, entropy = self._local_loss(mt, gold_trees, clamp_diff, num_words)
+            loss, clamp_loss, probs, entropy = self._local_loss(
+                mt, 
+                gold_trees, 
+                clamp_diff, 
+                num_words
+            )
         else:
-            loss, clamp_loss, probs, entropy = self._loss(mt, gold_trees, clamp_diff)
+            loss, clamp_loss, probs, entropy = self._loss(
+                mt, 
+                gold_trees, 
+                clamp_diff
+            )
         loss = loss + adjunct_loss
 
-        log_prefix = 'masked' if mask_next else ''
+        log_prefix = 'cutoff' if cutoffs is not None else ''
         self.log(f'{log_prefix} train loss', loss, prog_bar=True, batch_size=batch_size)
         self.log(f'{log_prefix} train entropy', entropy, batch_size=batch_size)
         self.log(f'{log_prefix} train probs', probs, batch_size=batch_size)
@@ -304,7 +323,8 @@ class Parser(pl.LightningModule):
         self.log(f'{log_prefix} train entropy percent', -entropy / loss, batch_size=batch_size)
         self.log(f'{log_prefix} train probs percent', -probs / loss, batch_size=batch_size)
         self.log(f'{log_prefix} clamp loss percent', clamp_loss / loss, batch_size=batch_size)
-        self.log(f'{log_prefix} train adjunct loss', adjunct_loss, batch_size=batch_size)
+        if self.predict_adjunct:
+            self.log(f'{log_prefix} train adjunct loss', adjunct_loss, batch_size=batch_size)
         if adjunct_acc is not None:
             self.log(f'{log_prefix} train adjunct acc', adjunct_acc, prog_bar=True, batch_size=batch_size)
         self.log('epoch', self.current_epoch, on_epoch=True)
@@ -333,14 +353,14 @@ class Parser(pl.LightningModule):
     def validation_step(self, batch, batch_idx):
         sentences = batch["sentences"]
         gold_trees = batch["gold_trees"]
-        gold_adjuncts = batch["gold_adjuncts"]
+        gold_adjuncts = batch.get("gold_adjuncts")
         lengths = batch["lengths"]        
         gold_trees = gold_trees.to(self.device)
         gold_adjuncts = gold_adjuncts.to(self.device) if gold_adjuncts is not None else None
         lengths = lengths.to(self.device)
         batch_size = lengths.shape[0]
 
-        # unmasked metrics
+        # full-context metrics
         mt, clamp_diff, _, _ = self.forward(sentences, lengths, clamp=True)
         loss, _, probs, entropy = self._loss(mt, gold_trees, clamp_diff)
         y_pred = self._predict(mt, lengths)
@@ -354,34 +374,39 @@ class Parser(pl.LightningModule):
         self.log('val acc', tree_acc, batch_size=batch_size)
         self.log('val uas', node_acc, prog_bar=True, batch_size=batch_size)
 
-        # masked metrics
-        mask_next = torch.rand(1).item() < self.mask_next_prob
+        # cutoff metrics
         cutoffs = torch.randint(1, lengths.max().item(), size=(batch_size,), device=self.device)
         cutoffs = torch.minimum((cutoffs % (lengths - 4).clamp_min(1)) + 3, lengths - 2)
         # gold_trees = self.slice_prefix(gold_trees, cutoffs)
 
-        mt, clamp_diff, _, is_adjunct = self.forward(sentences, lengths, cutoffs=cutoffs, mask_next=True, clamp=True)
+        mt, clamp_diff, _, is_adjunct = self.forward(
+            sentences, 
+            lengths, 
+            cutoffs=cutoffs, 
+            clamp=True
+        )
         loss, _, probs, entropy = self._loss(mt, gold_trees, clamp_diff)
         y_pred = self._predict(mt, lengths)
         tree_acc, node_acc, _ = self._accuracy(gold_trees, y_pred, lengths)
-        masked_adjunct_loss = 0
-        masked_adjunct_acc = 0
-        if gold_adjuncts is not None and is_adjunct is not None:
+        cutoff_adjunct_loss = 0
+        cutoff_adjunct_acc = None
+        if self.predict_adjunct and gold_adjuncts is not None and is_adjunct is not None:
             batch_indices = torch.arange(batch_size, device=self.device)
             adjunct_labels = gold_adjuncts[batch_indices, cutoffs]
-            masked_adjunct_loss = self._adjunct_loss(is_adjunct, adjunct_labels)
-            masked_adjunct_acc = self._adjunct_accuracy(is_adjunct, adjunct_labels)
+            cutoff_adjunct_loss = self._adjunct_loss(is_adjunct, adjunct_labels)
+            cutoff_adjunct_acc = self._adjunct_accuracy(is_adjunct, adjunct_labels)
 
-        self.log('masked val loss', loss, prog_bar=True)
-        self.log('masked val entropy', entropy)
-        self.log('masked val probs', probs)
-        self.log('masked val entropy percent', -entropy / loss)
-        self.log('masked val probs percent', -probs / loss)
-        self.log('masked val acc', tree_acc)
-        self.log('masked val uas', node_acc, prog_bar=True)
-        self.log('masked val adjunct loss', masked_adjunct_loss)
-        if masked_adjunct_acc is not None:
-            self.log('masked val adjunct acc', masked_adjunct_acc, prog_bar=True)
+        self.log('cutoff val loss', loss, prog_bar=True)
+        self.log('cutoff val entropy', entropy)
+        self.log('cutoff val probs', probs)
+        self.log('cutoff val entropy percent', -entropy / loss)
+        self.log('cutoff val probs percent', -probs / loss)
+        self.log('cutoff val acc', tree_acc)
+        self.log('cutoff val uas', node_acc, prog_bar=True)
+        if self.predict_adjunct:
+            self.log('cutoff val adjunct loss', cutoff_adjunct_loss)
+        if cutoff_adjunct_acc is not None:
+            self.log('cutoff val adjunct acc', cutoff_adjunct_acc, prog_bar=True)
 
 
         return loss
@@ -417,7 +442,6 @@ class Parser(pl.LightningModule):
                 lengths, 
                 clamp=True, 
                 cutoffs=cutoffs,
-                mask_next= self.prediction_masknext
             )
             y_pred = self._predict(mt, lengths)
             if gold_trees is not None:

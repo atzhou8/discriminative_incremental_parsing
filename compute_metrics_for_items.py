@@ -325,7 +325,7 @@ if __name__ == '__main__':
     parser.add_argument('-i', '--input_csv', default='data/phenomena/SAP/items_filler.csv')
     parser.add_argument('-o', '--output_csv', default=None)
     parser.add_argument('-g', '--gold_trees', default=None)
-    parser.add_argument('--ckpt', default='last', choices=['val', 'mask', 'last'])
+    parser.add_argument('--ckpt', default='last', choices=['val', 'cutoff', 'last'])
     parser.add_argument('--batch-size', type=int, default=64)
     args = parser.parse_args()
 

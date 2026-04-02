@@ -45,8 +45,8 @@ parser.add_argument('-b', '--batch_size', type=int, default=128)
 parser.add_argument('-n', '--epochs', type=int, default=200)
 parser.add_argument('-p', '--patience', type=int, default=50)
 parser.add_argument('-er', '--entropy_reg', type=float, default=0)
-parser.add_argument('-m', '--mask_prob', type=float, default=0.5)
 parser.add_argument('-s', '--split_prob', type=float, default=0.3)
+parser.add_argument('-adj', '--predict_adjunct', action='store_true')
 parser.add_argument('--val_every_n', type=int, default=5)
 parser.add_argument('--local_steps', type=int, default=0)
 
@@ -65,7 +65,6 @@ if __name__ == '__main__':
         entropy_reg=args.entropy_reg,
         llm_output_layer=args.llm_layer,
         embedding_dim=args.embedding_dim,
-        mask_next_prob=args.mask_prob,
         split_trees_prob=args.split_prob,
         local_steps=args.local_steps,
     )
@@ -102,10 +101,10 @@ if __name__ == '__main__':
                 save_last=False,
             ),
             ModelCheckpoint(
-                monitor='masked val uas',
+                monitor='cutoff val uas',
                 mode='max',
                 save_top_k=1,
-                filename='best_mask_{epoch:02d}',
+                filename='best_cutoff_{epoch:02d}',
                 save_last=False,
             ),
             ModelCheckpoint(

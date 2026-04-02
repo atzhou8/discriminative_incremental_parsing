@@ -18,10 +18,9 @@ class EmbeddingModel(torch.nn.Module):
             trust_remote_code=False,
         ).to(device)
 
-        special_tokens = {'additional_special_tokens': ['<anchor>']}
-        # special_tokens = {'additional_special_tokens': ['<ROOT>', '<ANCHOR>']}
-        self.tokenizer.add_special_tokens(special_tokens)
-        self.model.resize_token_embeddings(len(self.tokenizer))
+        # special_tokens = {'additional_special_tokens': ['<anchor>']}
+        # self.tokenizer.add_special_tokens(special_tokens)
+        # self.model.resize_token_embeddings(len(self.tokenizer))
 
         # Freeze all parameters by default
         for param in self.model.parameters():
@@ -76,7 +75,7 @@ class EmbeddingModel(torch.nn.Module):
         tokenization.to(self.device)
         return tokenization
     
-    def get_representations(self, sentences, max_len, cutoffs=None, mask_next=False):
+    def get_representations(self, sentences, max_len, cutoffs=None):
         """Gets embeddings for each node in a UD tree meaning across subword
         units if necessary. Retrieve embeddings from the last transformer layer
         by default.
@@ -86,7 +85,7 @@ class EmbeddingModel(torch.nn.Module):
         cut_sentences = []
         for i, sentence in enumerate(sentences):
             if cutoffs is not None:
-                cutoff = int(cutoffs[i].item()) if torch.is_tensor(cutoffs[i]) else int(cutoffs[i])
+                cutoff = int(cutoffs[i].item())
                 cutoff = max(0, min(cutoff, len(sentence)))
                 num_to_mask = len(sentence) - cutoff
                 sentence[cutoff:] = ['<mask>'] * num_to_mask

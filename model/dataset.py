@@ -41,9 +41,17 @@ def treebank_collater(batch, cutoff_transform=None):
     if cutoff_transform is None:
         cutoff_transform = lambda x: x
     sentences, trees, lengths, is_adjunct = zip(*batch)
-    trees = pad_sequence(list(trees), batch_first=True, padding_value=0).long()
+    trees = pad_sequence(
+        list(trees), 
+        batch_first=True, 
+        padding_value=0
+    ).long()
+    is_adjunct = pad_sequence(
+        list(is_adjunct), 
+        batch_first=True, 
+        padding_value=0
+    ).long()
     lengths = torch.tensor(list(lengths), dtype=torch.int64)
-    is_adjunct = pad_sequence(list(is_adjunct), batch_first=True, padding_value=0).long()
     
     return {
         'sentences': list(sentences), 

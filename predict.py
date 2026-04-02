@@ -52,14 +52,9 @@ if __name__ == "__main__":
         default='none',
     )
 
-    parser.add_argument(
-        '-m',
-        '--mask_next',
-        action='store_true'
-    )
     parser.add_argument("--batch-size", type=int, default=72)
     args = parser.parse_args()
-    assert args.ckpt in ['val', 'mask', 'last']
+    assert args.ckpt in ['val', 'cutoff', 'last']
 
     ckpt_dir = Path('lightning_logs') / args.name / f'version_{args.version}' / 'checkpoints'
     if args.ckpt == 'last':
@@ -93,6 +88,5 @@ if __name__ == "__main__":
 
 
     model.set_prediction_save_path(output_dir)
-    model.prediction_masknext = args.mask_next
     trainer = Trainer(accelerator="auto", logger=logger, inference_mode=False)
     trainer.test(model=model, dataloaders=test_loader)
