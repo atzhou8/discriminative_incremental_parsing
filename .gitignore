@@ -1,3 +1,5 @@
 */__pycache__/
 *.csv
 /lightning_logs/
+*.Rproj.user
+*.scaled

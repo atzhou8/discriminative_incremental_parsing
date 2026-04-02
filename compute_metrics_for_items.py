@@ -14,7 +14,7 @@ from torch.nn.utils.rnn import pad_sequence
 from model.parser import Parser
 from model.utils import get_info_metrics, uniform_dist_like, recovered_dist_like
 
-info_metrics_to_save = [
+INFO_METRICS_TO_SAVE = [
     'kl_forward',
     # 'kl_root_shifted',
     'kl_backward',
@@ -33,7 +33,7 @@ def create_word_rows_for_sentence(sentence):
     doc = nlp(sentence)
     word_rows = [] 
     absorb_next = False
-    for token in doc.sentences[0].tokens:
+    for token in doc.sentences[0].tokens: # type: ignore
         # i.e. 'don't': ["do", "n't"]
         # TODO: add a check for sentences that begin with punctuation
         if token.text in string.punctuation or absorb_next:
@@ -53,7 +53,7 @@ def expand_items_to_word_rows(items_df, sentence_gold_indices=None):
     base_columns = list(items_df.columns)
     new_columns = [
         'SentenceTokenized',
-        'WordPosition', 
+        'word_pos', 
         'EachWord',
         'WordTokens', 
         'IsMultiWord',
@@ -63,7 +63,8 @@ def expand_items_to_word_rows(items_df, sentence_gold_indices=None):
         'GoldTree',
         'RecoveredTree',
         'BeforeSentence',
-        'AfterSentence'
+        'AfterSentence',
+        'IsAdjunct'
     ]
     output_dict = {column: [] for column in base_columns + new_columns}
 
@@ -78,7 +79,7 @@ def expand_items_to_word_rows(items_df, sentence_gold_indices=None):
                 for column in base_columns:
                     output_dict[column].append(row[column])
                 output_dict['SentenceTokenized'].append(tokenized_sentence)
-                output_dict['WordPosition'].append(pos)
+                output_dict['word_pos'].append(pos)
                 output_dict['EachWord'].append(each_word)
                 output_dict['WordTokens'].append(token)
                 output_dict['WordStart'].append(j==0)
@@ -91,6 +92,7 @@ def expand_items_to_word_rows(items_df, sentence_gold_indices=None):
                 output_dict['RecoveredTree'].append(np.nan)
                 output_dict['BeforeSentence'].append(np.nan)
                 output_dict['AfterSentence'].append(np.nan)
+                output_dict['IsAdjunct'].append(np.nan)
                 pos += 1
 
     
@@ -102,7 +104,7 @@ def combine_multi_words(word_rows, has_gold=False):
     for word_index, row in word_rows.iterrows():
         if row['SentenceStart']:
             num_deleted = 0
-        word_rows.loc[word_index, 'WordPosition'] -= num_deleted
+        word_rows.loc[word_index, 'word_pos'] -= num_deleted
         if row['IsMultiWord'] and row['WordStart']:
             found_full_word = False
             increment = 1
@@ -116,13 +118,13 @@ def combine_multi_words(word_rows, has_gold=False):
                     num_deleted += 1
                     word_length += 1
                     increment += 1 
-                    for metric in info_metrics_to_save:
+                    for metric in INFO_METRICS_TO_SAVE:
                         word_rows.loc[word_index, metric] += next_row[metric]
                         if has_gold:
                             word_rows.loc[word_index, f'{metric}_gold'] += next_row[f'{metric}_gold']
 
             
-            for metric in info_metrics_to_save:
+            for metric in INFO_METRICS_TO_SAVE:
                 word_rows.loc[word_index, metric] /= word_length
                 if has_gold:
                     word_rows.loc[word_index, f'{metric}_gold'] /= word_length
@@ -146,7 +148,7 @@ def load_gold_trees(word_rows, gold_path):
 def get_batch_from_word_rows(word_rows, id_start, id_end, device):
     sentences = [word_rows['SentenceTokenized'][i] for i in range(id_start, id_end)]
     lengths = [len(sentence)+1 for sentence in sentences]
-    cutoffs = [int(word_rows['WordPosition'][i]) for i in range(id_start, id_end)]
+    cutoffs = [int(word_rows['word_pos'][i]) for i in range(id_start, id_end)]
     gold_trees = [word_rows['GoldTree'][i] for i in range(id_start, id_end)]
     if not type(gold_trees[0]) is list:
         gold_trees = None
@@ -187,31 +189,32 @@ def add_info_metrics_all(
 
     with torch.no_grad():
         if gold_path is None: # Write all rows normally
-            for metric in info_metrics_to_save:
+            for metric in INFO_METRICS_TO_SAVE:
                 word_rows[metric] = []
             for start in range(0, num_rows, batch_size):
                 end = min(start + batch_size, num_rows)
                 batch_indices = range(start, end)
                 batch = get_batch_from_word_rows(word_rows, start, end, device)
-                dist_before, _, before_sentences = model.forward(
+                dist_before, _, before_sentences, _ = model.forward(
                     sentences=[s.copy() for s in batch['sentences']],
                     lengths=batch['lengths'],
                     cutoffs=batch['cutoffs']-1,
                 )
-                dist_after, _, after_sentences = model.forward(
+                dist_after, _, after_sentences, is_adjunct = model.forward(
                     sentences=[s.copy() for s in batch['sentences']],
                     lengths=batch['lengths'],
                     cutoffs=batch['cutoffs'],
                 )
                 metrics = get_info_metrics(dist_before, dist_after)
-
+                is_adjunct = torch.sigmoid(is_adjunct).squeeze(-1).cpu().numpy().tolist()
                 before_sentences = [' '.join(sentence) for sentence in before_sentences]
                 after_sentences = [' '.join(sentence) for sentence in after_sentences]
                 for j, row_idx in enumerate(batch_indices):
                     word_rows['BeforeSentence'][row_idx] = before_sentences[j]
                     word_rows['AfterSentence'][row_idx] = after_sentences[j]
+                    word_rows['IsAdjunct'][row_idx] = is_adjunct[j]
 
-                for metric in info_metrics_to_save:
+                for metric in INFO_METRICS_TO_SAVE:
                     values = metrics[metric]
                     for j, row_idx in enumerate(batch_indices):
                         word_rows[metric].append(values[j])
@@ -222,7 +225,7 @@ def add_info_metrics_all(
             unamb_indices = df.index[df['ambiguity'] == 'unambiguous'].tolist()
             word_rows = df.to_dict('list')
             # Assume indices do form a range
-            for metric in info_metrics_to_save:
+            for metric in INFO_METRICS_TO_SAVE:
                 word_rows[metric] = []
                 word_rows[f'{metric}_gold'] = []
             # Get metrics for ambiguous
@@ -230,12 +233,12 @@ def add_info_metrics_all(
                 end = min(start + batch_size, amb_indices[-1]+1)
                 batch_indices = range(start, end)
                 batch = get_batch_from_word_rows(word_rows, start, end, device)
-                dist_before, _, before_sentences = model.forward(
+                dist_before, _, before_sentences, _ = model.forward(
                     sentences=[s.copy() for s in batch['sentences']],
                     lengths=batch['lengths'],
                     cutoffs=batch['cutoffs']-1,
                 )
-                dist_after, _, after_sentences = model.forward(
+                dist_after, _, after_sentences, is_adjunct = model.forward(
                     sentences=[s.copy() for s in batch['sentences']],
                     lengths=batch['lengths'],
                     cutoffs=batch['cutoffs'],
@@ -245,6 +248,7 @@ def add_info_metrics_all(
                     gold_trees=batch['gold_trees'],
                     cutoffs=batch['cutoffs']
                 )
+                is_adjunct = torch.sigmoid(is_adjunct).squeeze(-1).cpu().numpy().tolist()
                 metrics = get_info_metrics(dist_before, dist_after)
                 gold_metrics = get_info_metrics(dist_before, dist_gold)
                 gold_trees = dist_gold.argmax.detach().cpu().numpy()
@@ -255,8 +259,9 @@ def add_info_metrics_all(
                     word_rows['BeforeSentence'][row_idx] = before_sentences[j]
                     word_rows['AfterSentence'][row_idx] = after_sentences[j]
                     word_rows['RecoveredTree'][row_idx] = gold_trees[j].tolist()
+                    word_rows['IsAdjunct'][row_idx] = is_adjunct[j]
 
-                for metric in info_metrics_to_save:
+                for metric in INFO_METRICS_TO_SAVE:
                     values = metrics[metric]
                     gold_values = gold_metrics[metric]
                     for j, row_idx in enumerate(batch_indices):
@@ -267,16 +272,17 @@ def add_info_metrics_all(
                 end = min(start + batch_size, unamb_indices[-1]+1)
                 batch_indices = range(start, end)
                 batch = get_batch_from_word_rows(word_rows, start, end, device)
-                dist_before, _, before_sentences = model.forward(
+                dist_before, _, before_sentences, _ = model.forward(
                     sentences=[s.copy() for s in batch['sentences']],
                     lengths=batch['lengths'],
                     cutoffs=batch['cutoffs']-1,
                 )
-                dist_after, _, after_sentences = model.forward(
+                dist_after, _, after_sentences, is_adjunct = model.forward(
                     sentences=[s.copy() for s in batch['sentences']],
                     lengths=batch['lengths'],
                     cutoffs=batch['cutoffs'],
                 )
+                is_adjunct = torch.sigmoid(is_adjunct).squeeze(-1).cpu().numpy().tolist()
                 metrics = get_info_metrics(dist_before, dist_after)
 
                 before_sentences = [' '.join(sentence) for sentence in before_sentences]
@@ -284,30 +290,33 @@ def add_info_metrics_all(
                 for j, row_idx in enumerate(batch_indices):
                     word_rows['BeforeSentence'][row_idx] = before_sentences[j]
                     word_rows['AfterSentence'][row_idx] = after_sentences[j]
+                    word_rows['IsAdjunct'][row_idx] = is_adjunct[j]
 
-                for metric in info_metrics_to_save:
+                for metric in INFO_METRICS_TO_SAVE:
                     values = metrics[metric]
                     for j, row_idx in enumerate(batch_indices):
                         word_rows[metric].append(values[j])
                         word_rows[f'{metric}_gold'].append(np.nan)
 
-
-
-
-
     df = pd.DataFrame(word_rows)
     combine_multi_words(df, gold_path is not None)
-    interleaved = []
-    for m in info_metrics_to_save:
-        interleaved.append(m)
-        gold = f"{m}_gold"
-        if gold in df.columns:
-            interleaved.append(gold)
-    front = ['EachWord'] + interleaved
-    df = df[front + [c for c in df.columns if c not in front]]
-    df.to_csv(output_path)
     return df
 
+def create_adjunct_weighted_columns(df):
+    for metric in INFO_METRICS_TO_SAVE:
+        df[f'{metric}_adjunct'] = (1 - df['IsAdjunct']) * df[metric]
+    
+    return df
+
+def create_forced_recovery_columns(df):
+    cp_mask = df['disambPositionAmb'] == df['word_pos']
+    disamb_mask = df['ambiguity'] == 'ambiguous'
+    mask = cp_mask & disamb_mask
+    for metric in INFO_METRICS_TO_SAVE:
+        df[f'{metric}_recovered'] = df[metric]
+        df.loc[mask, f'{metric}_recovered'] = df.loc[mask, f'{metric}_gold']
+
+    return df
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
@@ -346,13 +355,7 @@ if __name__ == '__main__':
         gold_path=args.gold_trees,
         batch_size=args.batch_size,
     )
+    df = create_forced_recovery_columns(df)
 
+    df.to_csv(output_csv)
     print(f'Wrote metrics to {output_csv}')
-
-
-
-
-        
-
-
-  

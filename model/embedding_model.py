@@ -100,7 +100,9 @@ class EmbeddingModel(torch.nn.Module):
         ).hidden_states[self.out_layer]
 
         # Strip BOS/EOS and combine subwords by meaning across word id
-        assert max_len >= len(tokenization.word_ids(0))
+        actual_len = len(tokenization.word_ids(0))
+        if max_len < actual_len:
+            raise ValueError(f"max_len ({max_len}) is less than tokenized sentence length ({actual_len}). Adjust max_len to be >= actual_len.")
         batch_size = len(cut_sentences)
         num_words = max_len
         embedding_dim = self.model.config.hidden_size

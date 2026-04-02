@@ -22,18 +22,28 @@ class TreebankDataset(Dataset):
         """Gets sentence as list of nodes in tree and tree structure as a 
         list of heads."""
         # initial 0 for distinguished root
-        tree = torch.Tensor([0] + [w.head for w in self.trees[idx].words])
+        heads = []
+        words = []
+        is_adjunct = []
+        for word in self.trees[idx].words:
+            heads.append(word.head)
+            words.append(word.text)
+            is_adjunct.append(1 if word.deprel.startswith('mod') else 0)
+            
+        is_adjunct = torch.Tensor([0] + is_adjunct) 
+        tree = torch.Tensor([0] + heads) # 0 for root
         words = [w.text for w in self.trees[idx].words]
         length = len(tree)
 
-        return words, tree, length
+        return words, tree, length, is_adjunct
 
 def treebank_collater(batch, cutoff_transform=None):
     if cutoff_transform is None:
         cutoff_transform = lambda x: x
-    sentences, trees, lengths = zip(*batch)
+    sentences, trees, lengths, is_adjunct = zip(*batch)
     trees = pad_sequence(list(trees), batch_first=True, padding_value=0).long()
     lengths = torch.tensor(list(lengths), dtype=torch.int64)
+    is_adjunct = pad_sequence(list(is_adjunct), batch_first=True, padding_value=0).long()
     
     return {
         'sentences': list(sentences), 
@@ -41,6 +51,7 @@ def treebank_collater(batch, cutoff_transform=None):
         'lengths': lengths,
         'cutoffs': cutoff_transform(None),
         'conditions': None,
+        'gold_adjuncts': is_adjunct
     }
 
 class PhenomenaDataset(Dataset):
@@ -82,5 +93,6 @@ def phenomena_collater(batch, cutoff_transform=None):
         'gold_trees': None, 
         'lengths': lengths,
         'cutoffs': cutoff_transform(cutoffs),
-        'conditions': conditions
+        'conditions': conditions,
+        'gold_adjuncts': None
     }
