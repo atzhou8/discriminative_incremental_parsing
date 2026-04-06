@@ -17,11 +17,11 @@ load_data <- function(subsetname,RTcutoffhigh=7000,RTcutofflow=0){
   #please note currently large files on google drive can't be loaded with url (due to the virus scanning warning)
   #please download the file manually first to the local folder
   
-  id <- ifelse(subsetname=="ClassicGP","ClassicGardenPathSet.csv",
-                ifelse(subsetname=="RelativeClause","RelativeClauseSet.csv",
-                  ifelse(subsetname=="AttachmentAmbiguity","AttachmentSet.csv",
-                    ifelse(subsetname=="Agreement","AgreementSet.csv",
-                           ifelse(subsetname=="Fillers","Fillers.csv","")))))
+  id <- ifelse(subsetname=="ClassicGP","items/ClassicGardenPathSet.csv",
+                ifelse(subsetname=="RelativeClause","items/RelativeClauseSet.csv",
+                  ifelse(subsetname=="AttachmentAmbiguity","items/AttachmentSet.csv",
+                    ifelse(subsetname=="Agreement","items/AgreementSet.csv",
+                           ifelse(subsetname=="Fillers","items/Fillers.csv","")))))
   rt.data <- read.csv(id, header=TRUE) %>% mutate(participant=MD5)
   rt.data$RT <- ifelse(rt.data$RT>RTcutoffhigh,NA,ifelse(rt.data$RT<RTcutofflow,NA,rt.data$RT))
   rt.data$Sentence <- str_replace_all(rt.data$Sentence, "%2C", ",")
@@ -382,7 +382,7 @@ Predicting_RT_with_spillover <- function(rt.data_df,subsetname, models = c('gpt2
           surps$surprisal_s  <- as.numeric(surps$surprisal) # TODO: implement scaling later
           surps$model <- model
           # get log_freq, etc. from lstm
-          lstm_ref <- read.csv(paste0('./items_',subsetname,'.gpt2.csv.scaled')) %>%
+          lstm_ref <- read.csv(paste0('./predictors/items_',subsetname,'.gpt2.csv.scaled')) %>%
           mutate(word_pos = word_pos + 1) %>%
           select(Sentence, word_pos, logfreq, logfreq_s, length, length_s, gpt2_surprisal=sum_surprisal_s) %>%
           distinct()

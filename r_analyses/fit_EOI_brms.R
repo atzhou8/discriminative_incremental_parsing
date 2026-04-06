@@ -35,26 +35,6 @@ if (!is.na(metric_idx)) {
 }
 
 # Collect results in an R data.frame (one row per model x ROI)
-results <- data.frame(
-  model = character(),
-  R2 = numeric(),
-  ROI = integer(),
-  NPS = numeric(),
-  NPZ = numeric(),
-  MVRR = numeric(),
-  NPS_CI_low = numeric(),
-  NPS_CI_high = numeric(),
-  NPZ_CI_low = numeric(),
-  NPZ_CI_high = numeric(),
-  MVRR_CI_low = numeric(),
-  MVRR_CI_high = numeric(),
-  DeltaLogLikelihood = numeric(),
-  p_metric = numeric(),
-  p_gpt = numeric(),
-  stringsAsFactors = FALSE,
-  check.names = FALSE
-)
-
 get_brms_parameters <- function(prior_type){
   
   if(prior_type == 'prior1'){
@@ -121,45 +101,6 @@ for (metric in metrics_to_fit) {
     saveRDS(model_fit, file=paste0('./eoi_models/', single, '_ROI', roi, '.rds'))
     rm(model_fit)
     gc()
-    
-
-  #   fe <- fixef(model_fit)[, "Estimate"]
-  #   vc <- try(vcov(model_fit), silent = TRUE)
-  #   z <- qnorm(0.975)
-  #   nps_var <- vc["AMBUAMB", "AMBUAMB"] + vc["AMBUAMB:SZM1", "AMBUAMB:SZM1"] + 2 * vc["AMBUAMB", "AMBUAMB:SZM1"]
-  #   npz_var <- vc["AMBUAMB", "AMBUAMB"] + vc["AMBUAMB:SZM2", "AMBUAMB:SZM2"] + 2 * vc["AMBUAMB", "AMBUAMB:SZM2"]
-  #   mvrr_var <- vc["AMBUAMB", "AMBUAMB"]
-    
-
-  #   nps <- fe["AMBUAMB"] + fe["AMBUAMB:SZM1"]
-  #   npz <- fe["AMBUAMB"] + fe["AMBUAMB:SZM2"]
-  #   mvrr <- fe["AMBUAMB"]
-
-  #   nps_ci_low <- nps - z * sqrt(nps_var)
-  #   nps_ci_high <- nps + z * sqrt(nps_var)
-  #   npz_ci_low <- npz - z * sqrt(npz_var)
-  #   npz_ci_high <- npz + z * sqrt(npz_var)
-  #   mvrr_ci_low <- mvrr - z * sqrt(mvrr_var)
-  #   mvrr_ci_high <- mvrr + z * sqrt(mvrr_var)
-  #   results <- rbind(results, data.frame(
-  #     model = single,
-  #     R2 = bayes_R2(model_fit),
-  #     ROI = roi,
-  #     NPS = nps,
-  #     NPS_CI_low = nps_ci_low,
-  #     NPS_CI_high = nps_ci_high,
-  #     NPZ = npz,
-  #     NPZ_CI_low = npz_ci_low,
-  #     NPZ_CI_high = npz_ci_high,
-  #     MVRR = mvrr,
-  #     MVRR_CI_low = mvrr_ci_low,
-  #     MVRR_CI_high = mvrr_ci_high,
-  #     DeltaLogLikelihood = as.numeric(logLik(filler_model)) + 6577546,
-  #     p_metric = coef(summary(filler_model))['surprisal_s', 'Pr(>|t|)'],
-  #     p_metric_p1 = NaN,
-  #     p_metric_p2 = NaN,
-  #     stringsAsFactors = FALSE
-  #   ))
   }
 
   spillover <- paste0("parser_", metric, "_spillover")
@@ -186,45 +127,6 @@ for (metric in metrics_to_fit) {
     saveRDS(model_fit, file=paste0('./eoi_models/', spillover, '_ROI', roi, '.rds'))
     rm(model_fit)
     gc()
-
-    # fe <- fixef(model_fit)[, "Estimate"]
-    # vc <- try(vcov(model_fit), silent = TRUE)
-    # z <- qnorm(0.975)
-    # nps_var <- vc["AMBUAMB", "AMBUAMB"] + vc["AMBUAMB:SZM1", "AMBUAMB:SZM1"] + 2 * vc["AMBUAMB", "AMBUAMB:SZM1"]
-    # npz_var <- vc["AMBUAMB", "AMBUAMB"] + vc["AMBUAMB:SZM2", "AMBUAMB:SZM2"] + 2 * vc["AMBUAMB", "AMBUAMB:SZM2"]
-    # mvrr_var <- vc["AMBUAMB", "AMBUAMB"]
-    
-
-    # nps <- fe["AMBUAMB"] + fe["AMBUAMB:SZM1"]
-    # npz <- fe["AMBUAMB"] + fe["AMBUAMB:SZM2"]
-    # mvrr <- fe["AMBUAMB"]
-
-    # nps_ci_low <- nps - z * sqrt(nps_var)
-    # nps_ci_high <- nps + z * sqrt(nps_var)
-    # npz_ci_low <- npz - z * sqrt(npz_var)
-    # npz_ci_high <- npz + z * sqrt(npz_var)
-    # mvrr_ci_low <- mvrr - z * sqrt(mvrr_var)
-    # mvrr_ci_high <- mvrr + z * sqrt(mvrr_var)
-
-    # results <- rbind(results, data.frame(
-    #   model = spillover,
-    #   R2 = bayes_R2(model_fit),
-    #   ROI = roi,
-    #   NPS = nps,
-    #   NPS_CI_low = nps_ci_low,
-    #   NPS_CI_high = nps_ci_high,
-    #   NPZ = npz,
-    #   NPZ_CI_low = npz_ci_low,
-    #   NPZ_CI_high = npz_ci_high,
-    #   MVRR = mvrr,
-    #   MVRR_CI_low = mvrr_ci_low,
-    #   MVRR_CI_high = mvrr_ci_high,
-    #   DeltaLogLikelihood = as.numeric(logLik(filler_model)) + 6577546,
-    #   p_metric = coef(summary(filler_model))['surprisal_s', 'Pr(>|t|)'],
-    #   p_metric_p1 = coef(summary(filler_model))['surprisal_p1_s', 'Pr(>|t|)'],
-    #   p_metric_p2 = coef(summary(filler_model))['surprisal_p2_s', 'Pr(>|t|)'],
-    #   stringsAsFactors = FALSE
-    # ))
   }
 
 }

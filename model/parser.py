@@ -293,7 +293,7 @@ class Parser(pl.LightningModule):
         )
         adjunct_loss = 0
         adjunct_acc = None
-        if self.predict_adjunct and gold_adjuncts is not None 
+        if self.predict_adjunct and gold_adjuncts is not None \
         and cutoffs is not None and is_adjunct is not None:
             batch_indices = torch.arange(batch_size, device=self.device)
             adjunct_labels = gold_adjuncts[batch_indices, cutoffs]

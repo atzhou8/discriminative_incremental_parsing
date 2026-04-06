@@ -82,8 +82,8 @@ metrics_to_fit <- c(
 )
 
 surps_parser <- read.csv('../out/sud_with_adjunct/items_filler.parser.csv.scaled')
-surps_lstm <- read.csv('./items_filler.lstm.csv.scaled')
-surps_gpt2 <- read.csv('./items_filler.gpt2.csv.scaled')
+surps_lstm <- read.csv('./predictors/items_filler.lstm.csv.scaled')
+surps_gpt2 <- read.csv('./predictors/items_filler.gpt2.csv.scaled')
 spr <- load_data('Fillers')
 for (metric in metrics_to_fit) {
   # Ensure nuisance predictors expected by the spillover model exist.
