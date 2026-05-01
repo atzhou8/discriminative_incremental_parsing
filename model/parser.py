@@ -29,7 +29,7 @@ class Parser(pl.LightningModule):
         local_steps=0,
         predict_adjunct=False,
     ):
-        super(Parser, self).__init__()
+        super().__init__()
         self.embedding_model = EmbeddingModel(
             embedding_model_name, 
             self.device,
@@ -128,7 +128,7 @@ class Parser(pl.LightningModule):
                 is_adjunct = torch.zeros(batch_size, 1, device=embeddings.device)
                 is_adjunct[in_bounds] = self.mlp_adj(tokens_to_predict).to(is_adjunct.dtype)
          
-        # parser
+        # Parser
         head_repr = self.mlp_head(embeddings)  # (b, n, d)
         dep_repr  = self.mlp_dep(embeddings)   # (b, n, d)
 
@@ -211,15 +211,11 @@ class Parser(pl.LightningModule):
         
         log_probs = (scores - log_partition).double().mean()
         entropy = (log_partition - (marginals * mt.scores).sum((-1, -2))).mean()
-        clamp_loss = 0
-        # clamp_loss = clamp_diff * self.reg
-        loss = -log_probs - self.entropy_reg * entropy + clamp_loss
-        return loss, clamp_loss, log_probs, entropy
+        loss = -log_probs - self.entropy_reg * entropy + clamp_diff
+        return loss, clamp_diff, log_probs, entropy
     
     def _adjunct_loss(self, logits, adjunct_labels):
-        # Ensure pos_weight is on same device/dtype as logits to avoid device/type errors
         pos_weight = torch.tensor([6.5], device=logits.device, dtype=logits.dtype)
-        # criterion = torch.nn.BCEWithLogitsLoss(pos_weight=pos_weight)
         criterion = torch.nn.BCEWithLogitsLoss()
         loss = criterion(
             input=logits.squeeze(),
@@ -273,15 +269,10 @@ class Parser(pl.LightningModule):
         lengths = lengths.to(self.device)
         batch_size = lengths.shape[0]
 
-        if self.global_step > 1000 and self.global_step % 1000 == 0:
-            self.embedding_model.unfreeze_layer(self.layer_to_unfreeze)
-            self.layer_to_unfreeze = self.layer_to_unfreeze - 1
-
         slice_trees = torch.rand(1).item() < self.split_trees_prob
         if slice_trees:
             cutoffs = torch.randint(1, lengths.max().item(), size=(batch_size,), device=self.device)
-            cutoffs = torch.minimum((cutoffs % (lengths - 4).clamp_min(1)) + 3, lengths - 2)
-            # gold_trees = self.slice_prefix(gold_trees, cutoffs)
+            cutoffs = torch.minimum(cutoffs % (lengths - 4) + 4, lengths - 2)
         else:
             cutoffs = None      
 
@@ -332,19 +323,19 @@ class Parser(pl.LightningModule):
 
         return loss
 
-    def slice_prefix(self, gold_trees, cutoffs):
-        batch_size, num_words = gold_trees.shape
-        sliced_trees = gold_trees.clone()
+    # def slice_prefix(self, gold_trees, cutoffs):
+    #     batch_size, num_words = gold_trees.shape
+    #     sliced_trees = gold_trees.clone()
 
-        # Mask out nodes beyond cutoff
-        length_mask = torch.arange(num_words, device=self.device)[None, :] > cutoffs[:, None]
-        sliced_trees[length_mask] = 0
+    #     # Mask out nodes beyond cutoff
+    #     length_mask = torch.arange(num_words, device=self.device)[None, :] > cutoffs[:, None]
+    #     sliced_trees[length_mask] = 0
 
-        # Set floating nodes to <anchor>
-        floating_nodes = sliced_trees > cutoffs[:, None] 
-        sliced_trees[floating_nodes] = 1
+    #     # Set floating nodes to <anchor>
+    #     floating_nodes = sliced_trees > cutoffs[:, None] 
+    #     sliced_trees[floating_nodes] = 1
 
-        return sliced_trees
+    #     return sliced_trees
     
     def on_validation_start(self):
         self.embedding_model.eval()
@@ -376,8 +367,7 @@ class Parser(pl.LightningModule):
 
         # cutoff metrics
         cutoffs = torch.randint(1, lengths.max().item(), size=(batch_size,), device=self.device)
-        cutoffs = torch.minimum((cutoffs % (lengths - 4).clamp_min(1)) + 3, lengths - 2)
-        # gold_trees = self.slice_prefix(gold_trees, cutoffs)
+        cutoffs = torch.minimum(cutoffs % (lengths - 4) + 4, lengths - 2)
 
         mt, clamp_diff, _, is_adjunct = self.forward(
             sentences, 

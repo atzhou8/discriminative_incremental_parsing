@@ -1,6 +1,6 @@
 import torch
 
-from transformers import AutoTokenizer, AutoModel
+from transformers import RobertaTokenizerFast, RobertaModel
 from einops import repeat
 
 class EmbeddingModel(torch.nn.Module):
@@ -11,8 +11,11 @@ class EmbeddingModel(torch.nn.Module):
     def __init__(self, model_name, device, out_layer=-6):
         super().__init__()
         self.device = device
-        self.tokenizer = AutoTokenizer.from_pretrained(model_name, add_prefix_space=True)
-        self.model = AutoModel.from_pretrained(
+        self.tokenizer = RobertaTokenizerFast.from_pretrained(
+            model_name, 
+            add_prefix_space=True
+        )
+        self.model = RobertaModel.from_pretrained(
             model_name,
             use_safetensors=True,
             trust_remote_code=False,
@@ -22,36 +25,12 @@ class EmbeddingModel(torch.nn.Module):
         # self.tokenizer.add_special_tokens(special_tokens)
         # self.model.resize_token_embeddings(len(self.tokenizer))
 
-        # Freeze all parameters by default
+        # Make sure all parameters are unfrozen
         for param in self.model.parameters():
-            param.requires_grad = False
-
-        for param in self.model.get_input_embeddings().parameters():
             param.requires_grad = True
 
         self.out_layer = out_layer
         self.config = self.model.config
-
-    def unfreeze_layer(self, layer):
-        if layer < 1:
-            return
-        for name, param in self.model.named_parameters():
-            if name.startswith('encoder.layer.'): # BERT models
-                try:
-                    block_idx = int(name.split('.')[2])
-                except (IndexError, ValueError):
-                    continue
-                if block_idx == layer:
-                    param.requires_grad = True
-            elif name.startswith('h.'): # GPT2 models
-                try:
-                    block_idx = int(name.split('.')[1])
-                except (IndexError, ValueError):
-                    continue
-                if block_idx == layer:
-                    param.requires_grad = True
-            elif 'LayerNorm' in name and 'encoder' not in name:
-                param.requires_grad = True
 
     def to(self, device):
         self.device = device

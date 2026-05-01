@@ -95,11 +95,13 @@ def recovered_dist_like(dist, gold_trees, cutoffs, temp=5):
 
     for batch_idx in range(batch_size):
         tree = gold_trees[batch_idx]
-        sentence_len = min(int(dist.lens[batch_idx].item()) + 1, len(tree) + 1)
-        batch_cutoff = cutoffs[batch_idx]
+        sentence_len = min(int(dist.lens[batch_idx].item()), len(tree))
+        batch_cutoff = int(cutoffs[batch_idx].item())
         scores[batch_idx, :batch_cutoff+1, :batch_cutoff+1] = -temp
         for dep in range(1, sentence_len):
-            head = int(tree[dep])
+            head = int(tree[dep].item()) if isinstance(tree[dep], torch.Tensor) else int(tree[dep])
+            if head < 0:
+                continue
             if head <= batch_cutoff and dep <= batch_cutoff:
                 scores[batch_idx, dep, head] = float(temp)
 
