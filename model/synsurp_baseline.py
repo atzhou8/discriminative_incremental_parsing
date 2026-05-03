@@ -81,6 +81,8 @@ class SynSurpRoBERTa(pl.LightningModule):
                 normalized_shape=(config.hidden_size), 
                 eps=config.layer_norm_eps
             ),
+            torch.nn.GELU(),
+            torch.nn.Dropout(0.1),
             torch.nn.Linear(config.hidden_size, self.num_tags)
         )
 
@@ -94,6 +96,8 @@ class SynSurpRoBERTa(pl.LightningModule):
                 normalized_shape=(config.hidden_size), 
                 eps=config.layer_norm_eps
             ),
+            torch.nn.GELU(),
+            torch.nn.Dropout(0.1),
             torch.nn.Linear(config.hidden_size, self.num_words)
         )
         self.learning_rate = learning_rate
@@ -130,12 +134,14 @@ class SynSurpRoBERTa(pl.LightningModule):
             supertag_preds.reshape(-1, self.num_tags),
             tag_labels.reshape(-1)
         )
-        
+
         return {
             'lm_preds': lm_preds,
             'supertag_preds': supertag_preds,
             'lm_loss': lm_loss,
-            'tag_loss': tag_loss
+            'tag_loss': tag_loss,
+            'word_labels': word_labels,
+            'tag_labels': tag_labels,
         }
 
     def configure_optimizers(self):
@@ -189,6 +195,14 @@ class SynSurpRoBERTa(pl.LightningModule):
                 word_labels[b, last_token_id] = self.word2id[next_word]
 
         return word_labels.to(self.device), tag_labels.to(self.device)
+
+    def _get_accuracy(self, preds, labels, ignore_index=-100):
+        mask = labels != -100
+        total = mask.sum()
+        if total.item() == 0:
+            return torch.tensor(0.0, device=self.device)
+        correct = (preds.eq(labels) & mask).sum().float()
+        return correct / total.float()
     
     def training_step(self, batch, batch_idx):
         batch_size = len(batch['sentences'])
@@ -197,9 +211,20 @@ class SynSurpRoBERTa(pl.LightningModule):
         tag_loss = output['tag_loss']
         loss = lm_loss + tag_loss
 
-        self.log(f'train loss', loss, prog_bar=True, batch_size=batch_size)
-        self.log(f'train lm loss', lm_loss, batch_size=batch_size)
-        self.log(f'train tag loss', tag_loss, batch_size=batch_size)
+        # compute accuracies for next-word LM and supertagging
+        word_preds = output['lm_preds'].argmax(dim=-1)
+        tag_preds = output['supertag_preds'].argmax(dim=-1)
+        word_labels = output['word_labels']
+        tag_labels = output['tag_labels']
+
+        word_acc = self._get_accuracy(word_preds, word_labels)
+        tag_acc = self._get_accuracy(tag_preds, tag_labels)
+
+        self.log('train loss', loss, prog_bar=True, batch_size=batch_size)
+        self.log('train lm loss', lm_loss, batch_size=batch_size)
+        self.log('train tag loss', tag_loss, batch_size=batch_size)
+        self.log('train word acc', word_acc, batch_size=batch_size)
+        self.log('train tag acc', tag_acc, batch_size=batch_size)
 
         return loss
     
@@ -210,9 +235,20 @@ class SynSurpRoBERTa(pl.LightningModule):
         tag_loss = output['tag_loss']
         loss = lm_loss + tag_loss
 
-        self.log(f'val loss', loss, prog_bar=True, batch_size=batch_size)
-        self.log(f'val lm loss', lm_loss, batch_size=batch_size)
-        self.log(f'val tag loss', tag_loss, batch_size=batch_size)
+        # compute accuracies for next-word LM and supertagging
+        word_preds = output['lm_preds'].argmax(dim=-1)
+        tag_preds = output['supertag_preds'].argmax(dim=-1)
+        word_labels = output['word_labels']
+        tag_labels = output['tag_labels']
+
+        word_acc = self._get_accuracy(word_preds, word_labels)
+        tag_acc = self._get_accuracy(tag_preds, tag_labels)
+
+        self.log('val loss', loss, prog_bar=True, batch_size=batch_size)
+        self.log('val lm loss', lm_loss, batch_size=batch_size)
+        self.log('val tag loss', tag_loss, batch_size=batch_size)
+        self.log('val word acc', word_acc, prog_bar=True, batch_size=batch_size)
+        self.log('val tag acc', tag_acc, prog_bar=True, batch_size=batch_size)
 
         return loss
 

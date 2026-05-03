@@ -104,7 +104,7 @@ if __name__ == '__main__':
             EarlyStopping(
                 monitor='val loss',
                 mode='min',
-                patience=5,
+                patience=100,
             ),
             ModelCheckpoint(
                 filename='last',
