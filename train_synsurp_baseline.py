@@ -37,6 +37,7 @@ parser.add_argument('--min_word_count', type=int, default=5)
 parser.add_argument('-b', '--batch_size', type=int, default=128)
 parser.add_argument('-n', '--epochs', type=int, default=100)
 parser.add_argument('-lr', '--learning_rate', type=float, default=5e-5)
+parser.add_argument('--accumulate_grad_batches', type=int, default=1)
 parser.add_argument('-v', '--version_number', type=int, default=None)
 
 if __name__ == '__main__':
@@ -92,6 +93,7 @@ if __name__ == '__main__':
         max_epochs=args.epochs,
         devices=1,
         logger=logger,
+        accumulate_grad_batches=args.accumulate_grad_batches,
         precision='bf16-mixed',
         callbacks=[
             ModelCheckpoint(
