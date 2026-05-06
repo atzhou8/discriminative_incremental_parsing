@@ -19,11 +19,11 @@ device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 ROOT = Path(__file__).resolve().parent
 data_dir = ROOT / 'data' / 'treebanks' / 'SUD_English-EWT+GUM+Reddit+LinES+PUD'
-
+ccg_dir = ROOT / 'data' / 'treebanks' / 'ccgbank'
 train_sentences = data_dir / 'en_ewtgumredditlinespud-sentences.txt'
 train_tags = data_dir / 'en_ewtgumredditlinespud-ccgtags.txt'
-dev_tags = data_dir / 'ewt_dev_ccgtags.txt'
-dev_sentences = data_dir / 'ewt_dev_sentences.txt'
+dev_tags = ccg_dir / 'dev.stags'
+dev_sentences = ccg_dir / 'dev.words'
 
 
 parser = argparse.ArgumentParser()

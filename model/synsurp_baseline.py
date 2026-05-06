@@ -84,7 +84,7 @@ class SynSurpRoBERTa(pl.LightningModule):
                 normalized_shape=(config.hidden_size), 
                 eps=config.layer_norm_eps
             ),
-            torch.nn.GELU(),
+            torch.nn.ReLU(),
             torch.nn.Dropout(0.1),
             torch.nn.Linear(config.hidden_size, self.num_tags)
         )
@@ -100,7 +100,7 @@ class SynSurpRoBERTa(pl.LightningModule):
                 normalized_shape=(config.hidden_size), 
                 eps=config.layer_norm_eps
             ),
-            torch.nn.GELU(),
+            torch.nn.ReLU(),
             torch.nn.Dropout(0.1),
             torch.nn.Linear(config.hidden_size, self.num_words)
         )
