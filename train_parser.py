@@ -14,14 +14,14 @@ from model.dataset import TreebankDataset, treebank_collater
 from model.parser import Parser
 from model.utils import build_loader
 
-torch.set_float32_matmul_precision("medium")
+torch.set_float32_matmul_precision('medium')
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 ROOT = Path(__file__).resolve().parent
-en_train = ROOT / "data" / "treebanks" / "UD_English-GUM" / "en_gum-ud-train-inc.conllu"
-en_test = ROOT / "data" / "treebanks" / "UD_English-GUM" / "en_gum-ud-test.conllu"
-en_dev = ROOT / "data" / "treebanks" / "UD_English-GUM" / "en_gum-ud-dev.conllu"
-en_llm = 'goldfish-models/eng_latn_1000mb'
+en_train = ROOT / 'data' / 'treebanks' / 'UD_English-GUM' / 'en_gum-ud-train-inc.conllu'
+en_test = ROOT / 'data' / 'treebanks' / 'UD_English-GUM' / 'en_gum-ud-test.conllu'
+en_dev = ROOT / 'data' / 'treebanks' / 'UD_English-GUM' / 'en_gum-ud-dev.conllu'
+en_llm = 'FacebookAI/roberta_large'
 
 
 parser = argparse.ArgumentParser()
@@ -35,11 +35,10 @@ parser.add_argument('-e', '--embedding_model',
 parser.add_argument('-mr', '--multiroot', action='store_true')
 parser.add_argument('-l', '--llm_layer', type=int, default=7)
 parser.add_argument('-dim', '--embedding_dim', type=int, default=512)
-parser.add_argument('-r', '--regularization', type=float, default=1e-2)
 parser.add_argument('-lr', '--learning_rate', type=float, default=1e-4)
 parser.add_argument('-c', '--clamp', type=int, default=25)
-parser.add_argument('--mlp_drop', type=float, default=0.2)
-parser.add_argument('--emb_drop', type=float, default=0.2)
+parser.add_argument('--mlp_drop', type=float, default=0.0)
+parser.add_argument('--emb_drop', type=float, default=0.0)
 parser.add_argument('-v', '--version_number', type=int, default=None)
 parser.add_argument('-b', '--batch_size', type=int, default=128)
 parser.add_argument('-n', '--epochs', type=int, default=200)
@@ -49,6 +48,7 @@ parser.add_argument('-s', '--split_prob', type=float, default=0.3)
 parser.add_argument('-adj', '--predict_adjunct', action='store_true')
 parser.add_argument('--val_every_n', type=int, default=5)
 parser.add_argument('--local_steps', type=int, default=0)
+parser.add_argument('-ga', '--accumulate_grad_batches', type=int, default=1)
 
 
 if __name__ == '__main__':
@@ -57,7 +57,6 @@ if __name__ == '__main__':
     model = Parser(
         embedding_model_name=args.embedding_model,
         incremental=args.multiroot,
-        reg=args.regularization,
         potential_clamp=args.clamp, 
         learning_rate=args.learning_rate,
         mlp_dropout=args.mlp_drop,
@@ -94,14 +93,14 @@ if __name__ == '__main__':
         precision='bf16-mixed',
         callbacks=[
             ModelCheckpoint(
-                monitor='val uas',
+                monitor='val probs',
                 mode='max',
                 save_top_k=1,
                 filename='best_val_{epoch:02d}',
                 save_last=False,
             ),
             ModelCheckpoint(
-                monitor='cutoff val uas',
+                monitor='cutoff val probs',
                 mode='max',
                 save_top_k=1,
                 filename='best_cutoff_{epoch:02d}',
@@ -118,6 +117,7 @@ if __name__ == '__main__':
         inference_mode=False,
         gradient_clip_val=5.0,
         gradient_clip_algorithm='norm',
+        accumulate_grad_batches=args.accumulate_grad_batches,
     )
 
     print('-' * 80)

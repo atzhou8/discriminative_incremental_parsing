@@ -16,7 +16,6 @@ class Parser(pl.LightningModule):
     def __init__(
         self, 
         embedding_model_name, 
-        reg,
         learning_rate,
         potential_clamp,
         emb_dropout,
@@ -72,7 +71,6 @@ class Parser(pl.LightningModule):
 
         # save hyperparams
         self.embedding_model_name = embedding_model_name
-        self.reg = reg
         self.llm_output_layer = llm_output_layer
         self.learning_rate = learning_rate
         self.potential_clamp = potential_clamp
@@ -98,7 +96,7 @@ class Parser(pl.LightningModule):
     ):
         """Get score for edge (i, j) as: 
                 
-                h.T@ W_pair @ d + w_head.T @ h + w_dep.T @ h + bias
+                h.T@ W_pair @ d + w_head.T @ h + w_dep.T @ d + bias
 
         Args:
             sentences : batch of sentences where each sentence is a list of
@@ -198,11 +196,10 @@ class Parser(pl.LightningModule):
         targets = gold_trees.view(batch * num_words)
         mask = mask.view(batch * num_words)
 
-        local = f.cross_entropy(logits[mask], targets[mask], reduction="mean")
+        local = f.cross_entropy(logits[mask], targets[mask], reduction='mean')
         entropy = (log_partition - (marginals * mt.scores).sum((-1, -2))).mean()
-        clamp_loss = clamp_diff * self.reg
-        loss = local + clamp_loss - self.entropy_reg * entropy
-        return loss, clamp_loss, local, entropy
+        loss = local + clamp_diff - self.entropy_reg * entropy
+        return loss, clamp_diff, local, entropy
 
     def _loss(self, mt, gold_trees, clamp_diff):
         log_partition = mt.log_partition
@@ -230,23 +227,8 @@ class Parser(pl.LightningModule):
         return (preds == labels).float().mean()
     
     def configure_optimizers(self):
-        parser_params = []
-        parser_params += list(self.mlp_head.parameters())
-        parser_params += list(self.mlp_dep.parameters())
-        if self.predict_adjunct:
-            parser_params += list(self.mlp_adj.parameters())
-        parser_params += [self.W_pair, self.w_head, self.w_dep, self.bias]
-        llm_params = [p for p in self.embedding_model.parameters()]
-
-        opt = torch.optim.Adam(
-            [
-                {"params": parser_params, "lr": self.learning_rate, "weight_decay": 1e-2},
-                {"params": llm_params, "lr": self.learning_rate * 0.01, "weight_decay": 1e-3},
-            ],
-            betas=(0.9, 0.999),
-        )
-        scheduler = torch.optim.lr_scheduler.StepLR(opt, step_size=30, gamma=0.5)
-        return {"optimizer": opt, "lr_scheduler": {"scheduler": scheduler, "interval": "epoch"}}
+        opt = torch.optim.Adam(self.parameters(), lr=self.learning_rate)
+        return opt
     
     def on_before_optimizer_step(self, optimizer):
         grads = [param.grad.detach().flatten() 
@@ -260,11 +242,11 @@ class Parser(pl.LightningModule):
         return super().to(device)
 
     def training_step(self, batch, batch_idx):
-        sentences = batch["sentences"]
-        gold_trees = batch["gold_trees"]
-        lengths = batch["lengths"]   
-        gold_adjuncts = batch.get("gold_adjuncts")
-        cutoffs = batch["cutoffs"]     
+        sentences = batch['sentences']
+        gold_trees = batch['gold_trees']
+        lengths = batch['lengths']   
+        gold_adjuncts = batch.get('gold_adjuncts')
+        cutoffs = batch['cutoffs']     
         gold_trees = gold_trees.to(self.device)
         lengths = lengths.to(self.device)
         batch_size = lengths.shape[0]
@@ -342,10 +324,10 @@ class Parser(pl.LightningModule):
         self.eval()
 
     def validation_step(self, batch, batch_idx):
-        sentences = batch["sentences"]
-        gold_trees = batch["gold_trees"]
-        gold_adjuncts = batch.get("gold_adjuncts")
-        lengths = batch["lengths"]        
+        sentences = batch['sentences']
+        gold_trees = batch['gold_trees']
+        gold_adjuncts = batch.get('gold_adjuncts')
+        lengths = batch['lengths']        
         gold_trees = gold_trees.to(self.device)
         gold_adjuncts = gold_adjuncts.to(self.device) if gold_adjuncts is not None else None
         lengths = lengths.to(self.device)
@@ -416,10 +398,10 @@ class Parser(pl.LightningModule):
 
     def test_step(self, batch, batch_idx):
         with torch.enable_grad():
-            sentences = batch["sentences"]
-            gold_trees = batch["gold_trees"]
-            lengths = batch["lengths"]
-            raw_cutoffs = batch["cutoffs"]
+            sentences = batch['sentences']
+            gold_trees = batch['gold_trees']
+            lengths = batch['lengths']
+            raw_cutoffs = batch['cutoffs']
             gold_trees = gold_trees.to(self.device) if gold_trees is not None else None          
             lengths = lengths.to(self.device)
             if raw_cutoffs is None:

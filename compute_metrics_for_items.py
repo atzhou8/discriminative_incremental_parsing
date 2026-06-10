@@ -15,54 +15,30 @@ from model.parser import Parser
 from model.utils import get_info_metrics, uniform_dist_like, recovered_dist_like
 
 INFO_METRICS_TO_SAVE = [
-    'kl_forward',
-    # 'kl_root_shifted',
     'kl_backward',
-    'kl_symmetric',
-    'js_geo',
-    'entropy_reduction',
-    'cross_entropy_forward',
-    'cross_entropy_backward',
-    'renyi_divergence_forward_2',
     'renyi_divergence_backward_2',
-    'renyi_divergence_symmetric_2',   
-    'renyi_divergence_forward_3',
     'renyi_divergence_backward_3',
-    'renyi_divergence_symmetric_3',   
-    'renyi_divergence_forward_5',
+    'renyi_divergence_backward_4',
     'renyi_divergence_backward_5',
-    'renyi_divergence_symmetric_5',   
-
 ]
-nlp = None
-
-
-def get_nlp(device):
-    global nlp
-    if nlp is None:
-        nlp = stanza.Pipeline(
-            lang='en',
-            processors='tokenize',
-            use_gpu=(device.type == 'cuda')
-        )
-    return nlp
-
+nlp = stanza.Pipeline(
+    lang='en',
+    processors='tokenize',
+    use_gpu=torch.cuda.is_available()
+)
 
 def create_word_rows_for_sentence(sentence):
-    if nlp is None:
-        raise RuntimeError('Tokenizer pipeline is not initialized. Call get_nlp(device) first.')
+    """Expand out a sentence into tokenization by punctuation."""
     doc = nlp(sentence)
     word_rows = [] 
-    absorb_next = False
+    in_compound = False
     for token in doc.sentences[0].tokens: # type: ignore
-        # i.e. 'don't': ["do", "n't"]
-        # TODO: add a check for sentences that begin with punctuation
-        if token.text in string.punctuation or absorb_next:
+        if token.text in string.punctuation or in_compound:
             word_rows[-1]['unsplit'] += token.text
             word_rows[-1]['split'] += [token.text]
-            absorb_next = False
-            if token.text == '-': # special rule for compounds
-                absorb_next = True
+            in_compound = False
+            if token.text == '-':
+                in_compound = True
         else:
             word_rows.append(
                 {'unsplit': token.text,
@@ -71,6 +47,8 @@ def create_word_rows_for_sentence(sentence):
     return word_rows
     
 def expand_items_to_word_rows(items_df, sentence_gold_indices=None):
+    """Expands items dataframe from SAP dataset that contains only sentences
+    to instead contain one token per row."""
     base_columns = list(items_df.columns)
     new_columns = [
         'SentenceTokenized',
@@ -116,16 +94,17 @@ def expand_items_to_word_rows(items_df, sentence_gold_indices=None):
                 output_dict['IsAdjunct'].append(np.nan)
                 pos += 1
 
-    
     return output_dict
 
 def combine_multi_words(word_rows, has_gold=False):
+    """After writing metrics, sum metric values over tokenized words 
+    and delete non-initial tokens"""
     indices_to_drop = []
-    num_deleted = 0 # decrement pos by this amount
+    deleted_in_curr_sent = 0
     for word_index, row in word_rows.iterrows():
         if row['SentenceStart']:
-            num_deleted = 0
-        word_rows.loc[word_index, 'word_pos'] -= num_deleted
+            deleted_in_curr_sent = 0
+        word_rows.loc[word_index, 'word_pos'] -= deleted_in_curr_sent
         if row['IsMultiWord'] and row['WordStart']:
             found_full_word = False
             increment = 1
@@ -136,7 +115,7 @@ def combine_multi_words(word_rows, has_gold=False):
                     found_full_word = True
                 else:
                     indices_to_drop.append(word_index+increment)
-                    num_deleted += 1
+                    deleted_in_curr_sent += 1
                     word_length += 1
                     increment += 1 
                     for metric in INFO_METRICS_TO_SAVE:
@@ -155,7 +134,7 @@ def combine_multi_words(word_rows, has_gold=False):
     word_rows.reset_index(drop=True, inplace=True)
 
 def load_gold_trees(word_rows, ambiguous_gold_path=None, unambiguous_gold_path=None):
-    """Load gold trees for ambiguous and/or unambiguous garden-path sentences."""
+    """Adds gold trees to big dataframe by sentence index"""
     word_rows['GoldTree'] = word_rows['GoldTree'].astype(object)
 
     if ambiguous_gold_path is not None:
@@ -166,11 +145,7 @@ def load_gold_trees(word_rows, ambiguous_gold_path=None, unambiguous_gold_path=N
             .drop_duplicates()
             .tolist()
         )
-        if len(amb_trees) != len(amb_sentence_indices):
-            raise ValueError(
-                f"Ambiguous gold tree count ({len(amb_trees)}) does not match "
-                f"ambiguous sentence count ({len(amb_sentence_indices)})."
-            )
+        assert len(amb_trees) == len(amb_sentence_indices):
         amb_tree_map = dict(zip(amb_sentence_indices, amb_trees))
         for index, row in word_rows.iterrows():
             if row['ambiguity'] == 'ambiguous':
@@ -184,17 +159,14 @@ def load_gold_trees(word_rows, ambiguous_gold_path=None, unambiguous_gold_path=N
             .drop_duplicates()
             .tolist()
         )
-        if len(unamb_trees) != len(unamb_sentence_indices):
-            raise ValueError(
-                f"Unambiguous gold tree count ({len(unamb_trees)}) does not match "
-                f"unambiguous sentence count ({len(unamb_sentence_indices)})."
-            )
+        assert len(unamb_trees) == len(unamb_sentence_indices):
         unamb_tree_map = dict(zip(unamb_sentence_indices, unamb_trees))
         for index, row in word_rows.iterrows():
             if row['ambiguity'] == 'unambiguous':
                 word_rows.at[index, 'GoldTree'] = unamb_tree_map[row['SentenceIndex']]
 
 def get_batch_from_word_rows(word_rows, batch_indices, device):
+    """Batch out a slice from big dataframe to feed into parser."""
     sentences = [word_rows['SentenceTokenized'][i] for i in batch_indices]
     lengths = [len(sentence)+1 for sentence in sentences]
     cutoffs = [int(word_rows['word_pos'][i]) for i in batch_indices]
@@ -222,25 +194,20 @@ def add_info_metrics_all(
     unambiguous_gold_path=None,
     batch_size=64,
 ):
-    """
-    Adding general info metrics that don't care about gold trees.
-    """
     items_path = Path(items_path)
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    get_nlp(device)
     model.eval()
     model.to(device)
 
     items_df = pd.read_csv(items_path)
     word_rows = expand_items_to_word_rows(items_df)
     num_rows = len(word_rows['Sentence'])
-
-
     with torch.no_grad():
-        if gold_path is None and unambiguous_gold_path is None: # Write all rows normally
+        # If no gold path provided, write all rows normally
+        if gold_path is None and unambiguous_gold_path is None:
             for metric in INFO_METRICS_TO_SAVE:
                 word_rows[metric] = []
             for start in range(0, num_rows, batch_size):
@@ -273,109 +240,106 @@ def add_info_metrics_all(
                     values = metrics[metric]
                     for j, row_idx in enumerate(batch_indices):
                         word_rows[metric].append(values[j])
-        else: # Write rows with a gold parse differently
+        # If garden path data, load gold trees and make "recovered" metric at CP
+        else: 
             df = pd.DataFrame(word_rows) 
             load_gold_trees(df, ambiguous_gold_path=gold_path, unambiguous_gold_path=unambiguous_gold_path)
             amb_indices = df.index[df['ambiguity'] == 'ambiguous'].tolist()
             unamb_indices = df.index[df['ambiguity'] == 'unambiguous'].tolist()
             word_rows = df.to_dict('list')
-            # Assume indices do form a range
             for metric in INFO_METRICS_TO_SAVE:
                 word_rows[metric] = []
                 word_rows[f'{metric}_gold'] = []
-            # Get metrics for ambiguous
-            if len(amb_indices) > 0:
-                for start in range(0, len(amb_indices), batch_size):
-                    end = min(start + batch_size, len(amb_indices))
-                    batch_indices = amb_indices[start:end]
-                    batch = get_batch_from_word_rows(word_rows, batch_indices, device)
-                    dist_before, _, before_sentences, _ = model.forward(
-                        sentences=[s.copy() for s in batch['sentences']],
-                        lengths=batch['lengths'],
-                        cutoffs=batch['cutoffs']-1,
-                    )
-                    dist_after, _, after_sentences, is_adjunct = model.forward(
-                        sentences=[s.copy() for s in batch['sentences']],
-                        lengths=batch['lengths'],
-                        cutoffs=batch['cutoffs'],
-                    )
-                    if batch['gold_trees'] is not None:
-                        dist_gold = recovered_dist_like(
-                            dist=dist_after,
-                            gold_trees=batch['gold_trees'],
-                            cutoffs=batch['cutoffs']
-                        )
-                        gold_metrics = get_info_metrics(dist_before, dist_gold)
-                        recovered_trees = dist_gold.argmax.detach().cpu().numpy()
-                    else:
-                        gold_metrics = None
-                        recovered_trees = None
+            
+            # Ambiguous
+            for start in range(0, len(amb_indices), batch_size):
+                end = min(start + batch_size, len(amb_indices))
+                batch_indices = amb_indices[start:end]
+                batch = get_batch_from_word_rows(word_rows, batch_indices, device)
+                dist_before, _, before_sentences, _ = model.forward(
+                    sentences=[s.copy() for s in batch['sentences']],
+                    lengths=batch['lengths'],
+                    cutoffs=batch['cutoffs']-1,
+                )
+                dist_after, _, after_sentences, is_adjunct = model.forward(
+                    sentences=[s.copy() for s in batch['sentences']],
+                    lengths=batch['lengths'],
+                    cutoffs=batch['cutoffs'],
+                )
+                dist_gold = recovered_dist_like(
+                    dist=dist_after,
+                    gold_trees=batch['gold_trees'],
+                    cutoffs=batch['cutoffs']
+                )
+                gold_metrics = get_info_metrics(dist_before, dist_gold)
+                recovered_trees = dist_gold.argmax.detach().cpu().numpy()
 
-                    if is_adjunct is not None:
-                        is_adjunct = torch.sigmoid(is_adjunct).squeeze(-1).cpu().numpy().tolist()
-                    else:
-                        is_adjunct = [None for _ in batch_indices]
-                    metrics = get_info_metrics(dist_before, dist_after)
+                if is_adjunct is not None:
+                    is_adjunct = torch.sigmoid(is_adjunct).squeeze(-1).cpu().numpy().tolist()
+                else:
+                    is_adjunct = [None for _ in batch_indices]
+                metrics = get_info_metrics(dist_before, dist_after)
 
-                    before_sentences = [' '.join(sentence) for sentence in before_sentences]
-                    after_sentences = [' '.join(sentence) for sentence in after_sentences]
+                before_sentences = [' '.join(sentence) for sentence in before_sentences]
+                after_sentences = [' '.join(sentence) for sentence in after_sentences]
+                for j, row_idx in enumerate(batch_indices):
+                    word_rows['BeforeSentence'][row_idx] = before_sentences[j]
+                    word_rows['AfterSentence'][row_idx] = after_sentences[j]
+                    if recovered_trees is not None:
+                        word_rows['RecoveredTree'][row_idx] = recovered_trees[j].tolist()
+                    word_rows['IsAdjunct'][row_idx] = is_adjunct[j]
+
+                for metric in INFO_METRICS_TO_SAVE:
+                    values = metrics[metric]
+                    gold_values = gold_metrics[metric] if gold_metrics is not None else None
                     for j, row_idx in enumerate(batch_indices):
-                        word_rows['BeforeSentence'][row_idx] = before_sentences[j]
-                        word_rows['AfterSentence'][row_idx] = after_sentences[j]
-                        if recovered_trees is not None:
-                            word_rows['RecoveredTree'][row_idx] = recovered_trees[j].tolist()
-                        word_rows['IsAdjunct'][row_idx] = is_adjunct[j]
-
-                    for metric in INFO_METRICS_TO_SAVE:
-                        values = metrics[metric]
-                        gold_values = gold_metrics[metric] if gold_metrics is not None else None
-                        for j, row_idx in enumerate(batch_indices):
-                            word_rows[metric].append(values[j])
-                            word_rows[f'{metric}_gold'].append(gold_values[j] if gold_values is not None else np.nan)
-            # Get metrics for unambiguous
-            if len(unamb_indices) > 0:
-                for start in range(0, len(unamb_indices), batch_size):
-                    end = min(start + batch_size, len(unamb_indices))
-                    batch_indices = unamb_indices[start:end]
-                    batch = get_batch_from_word_rows(word_rows, batch_indices, device)
-                    dist_before, _, before_sentences, _ = model.forward(
-                        sentences=[s.copy() for s in batch['sentences']],
-                        lengths=batch['lengths'],
-                        cutoffs=batch['cutoffs']-1,
-                    )
-                    dist_after, _, after_sentences, is_adjunct = model.forward(
-                        sentences=[s.copy() for s in batch['sentences']],
-                        lengths=batch['lengths'],
-                        cutoffs=batch['cutoffs'],
-                    )
-                    if is_adjunct is not None:
-                        is_adjunct = torch.sigmoid(is_adjunct).squeeze(-1).cpu().numpy().tolist()
-                    else:
-                        is_adjunct = [None for _ in batch_indices]
-                    metrics = get_info_metrics(dist_before, dist_after)
-                    if batch['gold_trees'] is not None:
-                        dist_gold = recovered_dist_like(
-                            dist=dist_after,
-                            gold_trees=batch['gold_trees'],
-                            cutoffs=batch['cutoffs']
+                        word_rows[metric].append(values[j])
+                        word_rows[f'{metric}_gold'].append(
+                            gold_values[j] if gold_values is not None else np.nan
                         )
-                        gold_metrics = get_info_metrics(dist_before, dist_gold)
-                    else:
-                        gold_metrics = None
+            
+            # Unambiguous
+            for start in range(0, len(unamb_indices), batch_size):
+                end = min(start + batch_size, len(unamb_indices))
+                batch_indices = unamb_indices[start:end]
+                batch = get_batch_from_word_rows(word_rows, batch_indices, device)
+                dist_before, _, before_sentences, _ = model.forward(
+                    sentences=[s.copy() for s in batch['sentences']],
+                    lengths=batch['lengths'],
+                    cutoffs=batch['cutoffs']-1,
+                )
+                dist_after, _, after_sentences, is_adjunct = model.forward(
+                    sentences=[s.copy() for s in batch['sentences']],
+                    lengths=batch['lengths'],
+                    cutoffs=batch['cutoffs'],
+                )
+                if is_adjunct is not None:
+                    is_adjunct = torch.sigmoid(is_adjunct).squeeze(-1).cpu().numpy().tolist()
+                else:
+                    is_adjunct = [None for _ in batch_indices]
+                metrics = get_info_metrics(dist_before, dist_after)
+                dist_gold = recovered_dist_like(
+                    dist=dist_after,
+                    gold_trees=batch['gold_trees'],
+                    cutoffs=batch['cutoffs']
+                )
+                gold_metrics = get_info_metrics(dist_before, dist_gold)
 
-                    before_sentences = [' '.join(sentence) for sentence in before_sentences]
-                    after_sentences = [' '.join(sentence) for sentence in after_sentences]
+                before_sentences = [' '.join(sentence) for sentence in before_sentences]
+                after_sentences = [' '.join(sentence) for sentence in after_sentences]
+                for j, row_idx in enumerate(batch_indices):
+                    word_rows['BeforeSentence'][row_idx] = before_sentences[j]
+                    word_rows['AfterSentence'][row_idx] = after_sentences[j]
+                    word_rows['IsAdjunct'][row_idx] = is_adjunct[j]
+
+                for metric in INFO_METRICS_TO_SAVE:
+                    values = metrics[metric]
+                    gold_values = gold_metrics[metric] if gold_metrics is not None else None
                     for j, row_idx in enumerate(batch_indices):
-                        word_rows['BeforeSentence'][row_idx] = before_sentences[j]
-                        word_rows['AfterSentence'][row_idx] = after_sentences[j]
-                        word_rows['IsAdjunct'][row_idx] = is_adjunct[j]
-
-                    for metric in INFO_METRICS_TO_SAVE:
-                        values = metrics[metric]
-                        gold_values = gold_metrics[metric] if gold_metrics is not None else None
-                        for j, row_idx in enumerate(batch_indices):
-                            word_rows[metric].append(values[j])
-                            word_rows[f'{metric}_gold'].append(gold_values[j] if gold_values is not None else np.nan)
+                        word_rows[metric].append(values[j])
+                        word_rows[f'{metric}_gold'].append(
+                            gold_values[j] if gold_values is not None else np.nan
+                        )
 
     df = pd.DataFrame(word_rows)
     combine_multi_words(df, (gold_path is not None) or (unambiguous_gold_path is not None))
@@ -383,8 +347,7 @@ def add_info_metrics_all(
 
 def create_adjunct_weighted_columns(df):
     for metric in INFO_METRICS_TO_SAVE:
-        df[f'{metric}_adjunct'] = (1 - df['IsAdjunct']) * df[metric]
-    
+        df[f'{metric}_adjunct'] = (1 - df['IsAdjunct']) * df[metric]    
     return df
 
 def create_forced_recovery_columns(df):
@@ -394,7 +357,6 @@ def create_forced_recovery_columns(df):
     for metric in INFO_METRICS_TO_SAVE:
         df[f'{metric}_recovered'] = df[metric]
         df.loc[mask, f'{metric}_recovered'] = df.loc[mask, f'{metric}_gold']
-
     return df
 
 if __name__ == '__main__':
@@ -423,11 +385,7 @@ if __name__ == '__main__':
     print(f'Loading checkpoint from {best_ckpt}')
     model = Parser.load_from_checkpoint(best_ckpt)
 
-    if args.output_csv is None:
-        output_csv = f'out/test.csv'
-    else:
-        output_csv = args.output_csv
-
+    output_csv = args.output_csv
     df = add_info_metrics_all(
         model=model,
         items_path=args.input_csv,

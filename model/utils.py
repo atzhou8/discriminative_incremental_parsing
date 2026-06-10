@@ -18,7 +18,6 @@ def tensors_to_conllu(words, heads, cutoffs, write_path):
 
     batch_size = len(words)
     sentences = []
-    # words = [words[:cutoff] for words, cutoff in zip(words, cutoffs)]
     for b in range(batch_size):
         sentence = []
         for idx in range(len(words[b])): 
@@ -45,7 +44,7 @@ def build_loader(
         cutoff_fn = None
 ):
     assert dataset_type in ['treebank', 'phenomena'], \
-          "Dataset type must be either treebank or phenomena"
+          'Dataset type must be either treebank or phenomena'
     D = TreebankDataset if dataset_type=='treebank' else PhenomenaDataset
     col_fn = (lambda x: treebank_collater(x, cutoff_fn)) if dataset_type=='treebank' \
              else (lambda x: phenomena_collater(x, cutoff_fn))
@@ -79,6 +78,19 @@ def renyi_divergence(dist_before, dist_after, alpha):
     ).log_partition
 
     renyi_divergence = (lp_mixed - alpha*lp_before - (1-alpha)*lp_after) / (alpha-1)
+
+    return renyi_divergence.detach().cpu().numpy()
+
+def renyi_cross_entropy(dist_before, dist_after, alpha):
+    lp_before = dist_before.log_partition
+    lp_after = dist_after.log_partition
+    lp_mixed = MatrixTree(
+        dist_before.scores + (alpha - 1) * dist_after.scores,
+        dist_before.lens,
+        multiroot=dist_before.multiroot
+    ).log_partition
+
+    renyi_divergence = lp_after + (lp_mixed - lp_before) / (1-alpha)
 
     return renyi_divergence.detach().cpu().numpy()
 
@@ -122,7 +134,7 @@ def weighted_root_dist_like(dist, scale_factor=5):
 
 def get_info_metrics(dist_before, dist_after):
     assert (dist_before.lens == dist_after.lens).all()
-    renyi_alphas = [2, 3, 5]
+    renyi_alphas = [2, 3, 4, 5, 6]
 
     metrics = {}
     metrics['entropy_before'] = dist_before.entropy.detach().cpu().numpy()
@@ -133,6 +145,9 @@ def get_info_metrics(dist_before, dist_after):
         metrics[f'renyi_divergence_forward_{alpha}'] = renyi_divergence(dist_before, dist_after, alpha)
         metrics[f'renyi_divergence_backward_{alpha}'] = renyi_divergence(dist_after, dist_before, alpha)
         metrics[f'renyi_divergence_symmetric_{alpha}'] = 0.5 * metrics[f'renyi_divergence_forward_{alpha}'] + 0.5 * metrics[f'renyi_divergence_backward_{alpha}']
+        metrics[f'renyi_crossent_forward_{alpha}'] = renyi_cross_entropy(dist_before, dist_after, alpha)
+        metrics[f'renyi_crossent_backward_{alpha}'] = renyi_cross_entropy(dist_after, dist_before, alpha)
+        metrics[f'renyi_crossent_symmetric_{alpha}'] = 0.5 * metrics[f'renyi_crossent_forward_{alpha}'] + 0.5 * metrics[f'renyi_crossent_backward_{alpha}']
 
     # metrics['entropy_reduction'] = metrics['entropy_before'] - metrics['entropy_after']
     entropy_before = dist_before.entropy.detach().cpu().numpy()
@@ -147,9 +162,6 @@ def get_info_metrics(dist_before, dist_after):
     metrics['kl_forward'] = dist_before.kl(dist_after).detach().cpu().numpy()
     metrics['kl_backward'] = dist_after.kl(dist_before).detach().cpu().numpy()
     metrics['kl_symmetric'] = 0.5 * (metrics['kl_forward'] + metrics['kl_backward'])
-    # dist_before_rootshift = weighted_root_dist_like(dist_before)
-    # dist_after_rootshift = weighted_root_dist_like(dist_after)
-    # metrics['kl_root_shifted'] = dist_before_rootshift.kl(dist_after_rootshift)
     dist_mix = MatrixTree(
         scores=dist_before.scores + dist_after.scores,
         lens=dist_before.lens,

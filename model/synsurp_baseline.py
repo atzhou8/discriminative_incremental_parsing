@@ -10,7 +10,7 @@ from einops import repeat
 
 
 def get_vocab_from_text(file_name, min_count=1, add_oov=False):
-    tag_seqs = Path(file_name).read_text(encoding="utf-8").splitlines()
+    tag_seqs = Path(file_name).read_text(encoding='utf-8').splitlines()
     counter = Counter()
     for seq in tag_seqs:
         if not seq:
@@ -26,8 +26,8 @@ def get_vocab_from_text(file_name, min_count=1, add_oov=False):
 class SynSurpDataset(Dataset):
 
     def __init__(self, sentence_dir, tag_dir):
-        self.all_tags = Path(tag_dir).read_text(encoding="utf-8").splitlines()
-        self.all_sentences = Path(sentence_dir).read_text(encoding="utf-8").splitlines()
+        self.all_tags = Path(tag_dir).read_text(encoding='utf-8').splitlines()
+        self.all_sentences = Path(sentence_dir).read_text(encoding='utf-8').splitlines()
 
         assert len(self.all_tags) == len(self.all_sentences)
 
@@ -55,7 +55,7 @@ class SynSurpRoBERTa(pl.LightningModule):
         model_name, 
         ccg_tagset, 
         wordset,
-        learning_rate=5e-5
+        learning_rate=1e-5
     ):
         super().__init__()
         # roberta model
@@ -78,14 +78,11 @@ class SynSurpRoBERTa(pl.LightningModule):
         self.id2tag = {i: t for i, t in enumerate(ccg_tagset)}
         self.tag2id = {t: i for i, t in enumerate(ccg_tagset)}
         self.supertagging_head = torch.nn.Sequential(
-            torch.nn.Dropout(0.1),
             torch.nn.Linear(config.hidden_size, config.hidden_size),
             torch.nn.LayerNorm(
                 normalized_shape=(config.hidden_size), 
                 eps=config.layer_norm_eps
             ),
-            torch.nn.ReLU(),
-            torch.nn.Dropout(0.1),
             torch.nn.Linear(config.hidden_size, self.num_tags)
         )
 
@@ -94,14 +91,11 @@ class SynSurpRoBERTa(pl.LightningModule):
         self.id2word = {i: t for i, t in enumerate(wordset)}
         self.word2id = {t: i for i, t in enumerate(wordset)}        
         self.lm_head = torch.nn.Sequential(
-            torch.nn.Dropout(0.1),
             torch.nn.Linear(config.hidden_size, config.hidden_size),
             torch.nn.LayerNorm(
                 normalized_shape=(config.hidden_size), 
                 eps=config.layer_norm_eps
             ),
-            torch.nn.ReLU(),
-            torch.nn.Dropout(0.1),
             torch.nn.Linear(config.hidden_size, self.num_words)
         )
         self.learning_rate = learning_rate
@@ -121,7 +115,7 @@ class SynSurpRoBERTa(pl.LightningModule):
             sentences,
             is_split_into_words=True, 
             return_tensors='pt',
-            padding='max_length',
+            padding=True,
             truncation=True,
         )
         tokens = tokens.to(self.device)
@@ -134,7 +128,7 @@ class SynSurpRoBERTa(pl.LightningModule):
         
         lm_preds = self.lm_head(word_embeddings)
         supertag_preds = self.supertagging_head(word_embeddings)
-              
+
         word_labels, tag_labels = self._get_word_level_labels(
             sentences,
             tags,
@@ -144,10 +138,14 @@ class SynSurpRoBERTa(pl.LightningModule):
             lm_preds.reshape(-1, self.num_words),
             word_labels.reshape(-1)
         )
-        tag_loss = f.cross_entropy(
-            supertag_preds.reshape(-1, self.num_tags),
-            tag_labels.reshape(-1)
-        )
+        
+        if tags is not None:      
+            tag_loss = f.cross_entropy(
+                supertag_preds.reshape(-1, self.num_tags),
+                tag_labels.reshape(-1)
+            )
+        else:
+            tag_loss = None
 
         return {
             'lm_preds': lm_preds,
@@ -159,21 +157,9 @@ class SynSurpRoBERTa(pl.LightningModule):
         }
 
     def configure_optimizers(self):
-        head_params = []
-        head_params += list(self.lm_head.parameters())
-        head_params += list(self.supertagging_head.parameters())
-        llm_params = [p for p in self.causal_roberta.parameters()]
-
-        opt = torch.optim.Adam(
-            [
-                {"params": head_params, "lr": self.learning_rate, "weight_decay": 1e-2},
-                {"params": llm_params, "lr": self.learning_rate * 0.01, "weight_decay": 1e-3},
-            ],
-            betas=(0.9, 0.999),
-        )
-        scheduler = torch.optim.lr_scheduler.StepLR(opt, step_size=30, gamma=0.5)
-        return {"optimizer": opt, "lr_scheduler": {"scheduler": scheduler, "interval": "epoch"}}
-
+        opt = torch.optim.Adam(self.parameters(), lr=self.learning_rate)
+        return opt
+    
     def _tokens_to_words(self, token_embeddings, tokenized, batch_size):
         """Combines tokens into words by meaning, following same logic as
         embedding_model.py
@@ -184,7 +170,8 @@ class SynSurpRoBERTa(pl.LightningModule):
             dtype=torch.long,
             device=self.device
         )
-        valid = batch_word_ids > 0 
+        valid = (batch_word_ids > 0)
+        valid[:, 0] = True 
 
         
         max_word_id = batch_word_ids.max().item()
@@ -213,32 +200,39 @@ class SynSurpRoBERTa(pl.LightningModule):
         mask = repeat(counts != 0, 'b n -> b n d', d=hidden_size)
         word_embeddings = word_embeddings / denom
         word_embeddings = word_embeddings * mask
+        word_embeddings[:, 0, :] = token_embeddings[:, 0, :] 
         
-        # Drop root position carried over from embedding_model logic
-        return word_embeddings[:, 1:, :], max_word_id
+        return word_embeddings, max_word_id
     
     def _get_word_level_labels(self, sentences, tags, max_word_id):
         """Generate word-level labels for supertagging and next-word prediction.
-        Position i corresponds to word i (0-indexed).
         """
         batch_size = len(sentences)
         
-        tag_labels = -100 * torch.ones((batch_size, max_word_id), dtype=torch.long, device=self.device)
-        word_labels = -100 * torch.ones((batch_size, max_word_id), dtype=torch.long, device=self.device)
+        tag_labels = -100 * torch.ones((batch_size, max_word_id + 1), dtype=torch.long, device=self.device)
+        word_labels = -100 * torch.ones((batch_size, max_word_id + 1), dtype=torch.long, device=self.device)
         
         for b in range(batch_size):
-            curr_tags = tags[b]
+            if tags is not None:
+                curr_tags = tags[b]
             curr_words = sentences[b]
             num_words = len(curr_words)
             
-            # Assign labels for each word position (0-indexed)
-            for word_idx in range(min(num_words, max_word_id)):
-                # Supertag for current word
-                curr_tag = curr_tags[word_idx]
-                if curr_tag not in self.tag2id:
-                    curr_tag = '<oov>'
-                tag_labels[b, word_idx] = self.tag2id[curr_tag]
-                
+            # no tag for bos
+            first_word = curr_words[0]
+            if first_word not in self.word2id:
+                first_word = '<oov>'
+            word_labels[b, 0] = self.word2id[first_word]
+
+            # Assign labels for each word position
+            for word_idx in range(num_words):
+                # Supertag for current word (now at position i+1)
+                if tags is not None:
+                    curr_tag = curr_tags[word_idx]
+                    if curr_tag not in self.tag2id:
+                        curr_tag = '<oov>'
+                    tag_labels[b, word_idx+1] = self.tag2id[curr_tag]
+                    
                 # Next word prediction
                 if word_idx + 1 >= len(curr_words):
                     next_word = '<eos>'
@@ -247,7 +241,7 @@ class SynSurpRoBERTa(pl.LightningModule):
                     if next_word not in self.word2id:
                         next_word = '<oov>'
                 
-                word_labels[b, word_idx] = self.word2id[next_word]
+                word_labels[b, word_idx+1] = self.word2id[next_word]
         
         return word_labels.to(self.device), tag_labels.to(self.device)
 
@@ -278,7 +272,7 @@ class SynSurpRoBERTa(pl.LightningModule):
         output = self.forward(batch)
         lm_loss = output['lm_loss']
         tag_loss = output['tag_loss']
-        loss = 0 * lm_loss +  tag_loss
+        loss = lm_loss +  tag_loss
 
         # compute accuracies for next-word LM and supertagging
         word_preds = output['lm_preds'].argmax(dim=-1)

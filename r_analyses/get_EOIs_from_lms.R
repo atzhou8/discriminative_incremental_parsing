@@ -8,22 +8,25 @@ library(stringr)
 library(lme4)
 source('./util.R')
 
-rt.data <- load_data("ClassicGP")
-rt.data$SZM1 <- ifelse(rt.data$CONSTRUCTION=="NPS",1,0)
-rt.data$SZM2 <- ifelse(rt.data$CONSTRUCTION=="NPZ",1,0)
+gp.spr <- load_data("ClassicGP")
+print("Loaded ClassicGP data.")
+gp.spr$SZM1 <- ifelse(gp.spr$CONSTRUCTION=="NPS",1,0)
+gp.spr$SZM2 <- ifelse(gp.spr$CONSTRUCTION=="NPZ",1,0)
+roi_metrics = read.csv(file.path('./results/rt_models/mergedRT', 'roi', 'metrics.csv'))
+print(paste('Loaded ROI metrics from', file.path('./results/rt_models/mergedRT', 'roi', 'metrics.csv')))
 
-metrics_to_fit <- c(
-  'kl_forward',
-  'kl_backward',
-  'kl_forward_recovered',
-  'kl_backward_recovered',
-  'js_geo',
-  'js_geo_recovered',
-  'renyi_divergence_forward_5',
-  'renyi_divergence_forward_5_recovered',
-  'renyi_divergence_backward_5',
-  'renyi_divergence_backward_5_recovered'
+roi_df <- bind_metrics(gp.spr, roi_metrics)
+dir.create('results/EOIs', recursive=TRUE, showWarnings=FALSE)
+dir.create('results/eoi_models/merged', recursive=TRUE, showWarnings=FALSE)
+
+rds_files <- list.files(
+    file.path('./results/rt_models/mergedRT', 'roi/eachword', ''),
+  pattern = '\\.[Rr][Dd][Ss]$',
+  full.names = TRUE,
+  recursive = TRUE
 )
+rds_files <- sort(rds_files)
+output_path <- 'results/EOIs/lm/roi_EOIs.csv'
 # Collect results in an R data.frame (one row per model x ROI)
 results <- data.frame(
   model = character(),
@@ -31,142 +34,105 @@ results <- data.frame(
   NPS = numeric(),
   NPZ = numeric(),
   MVRR = numeric(),
-  IsSingular = logical(),
-  DeltaLogLikelihood = numeric(),
-  p_metric = numeric(),
-  p_gpt = numeric(),
   stringsAsFactors = FALSE,
   check.names = FALSE
 )
 
-for (metric in metrics_to_fit) {
-  onelagged <- paste0("parser_", metric, "_shared")
-  PredictedRT_df <- Predicting_RT_with_spillover(
-    rt.data,
-    "ClassicGP",
-    models = c(onelagged),
-    parser_predictor_col = metric
-  )
-  filler_model <- readRDS(paste0('./filler_models/filler_', onelagged, '.rds')) 
-  summary(filler_model)
-  for (roi in c(0, 1, 2)) {
-    model_fit <- lmer(predicted ~ AMBUAMB*(SZM1+SZM2) +
-                        (1 + AMBUAMB*(SZM1+SZM2) || item) +
-                        (1 | participant),
-                      data = subset(PredictedRT_df, model == onelagged & ROI == roi & !is.na(RT)))
+is_nonconverged <- function(fit) {
+  if (inherits(fit, "try-error") || is.null(fit)) {
+    return(TRUE)
+  }
+  FALSE
+}
+lmer_ctrl <- lmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 200000))
 
+# Get empirical
+print("Fitting empirical model.")
+model_fit <- try(
+  lmer(RT_merged ~ AMBUAMB*(SZM1+SZM2) +
+           (1 + AMBUAMB * (SZM1 + SZM2) || item) +
+           (1 + AMBUAMB * (SZM1 + SZM2) || participant),
+       data = subset(gp.spr, ROI == 0 & !is.na(RT_merged)),
+       control = lmer_ctrl),
+  silent = TRUE
+)
+saveRDS(model_fit, file = file.path('results/lm_eoi_models/mergedRT/roi/empirical.rds'))
+message('Saved RDS for empirical')
+
+if (is_nonconverged(model_fit)) {
+  nps <- NaN
+  npz <- NaN
+  mvrr <- NaN
+} else {
+  nps <- fixef(model_fit)["AMBUAMB"] + fixef(model_fit)["AMBUAMB:SZM1"]
+  npz <- fixef(model_fit)["AMBUAMB"] + fixef(model_fit)["AMBUAMB:SZM2"]
+  mvrr <- fixef(model_fit)["AMBUAMB"]
+}
+results <- rbind(results, data.frame(
+    model = 'empirical',
+    ROI = 0,
+    NPS = nps,
+    NPZ = npz,
+    MVRR = mvrr,
+    stringsAsFactors = FALSE
+  )
+)
+write.csv(results, file = output_path, row.names = FALSE)
+print(paste("Wrote", nrow(results), "rows to", output_path))
+
+for (rds_file in rds_files) {
+  model_name <- str_remove(basename(rds_file), '\\.[Rr][Dd][Ss]$')
+  message('Processing ', model_name)
+
+  predicted <- Predicting_RT_with_spillover(roi_df, rds_file)
+  # Fit the EOI model to the RT model's predictions, not the raw RTs.
+  model_fit <- try(
+    lmer(predicted ~ AMBUAMB*(SZM1+SZM2) +
+           (1 + AMBUAMB * (SZM1 + SZM2) || item) +
+           (1 + AMBUAMB * (SZM1 + SZM2) || participant),
+         data = subset(predicted, ROI == 0 & !is.na(predicted)),
+         control = lmer_ctrl),
+    silent = TRUE
+  )
+
+  if (is_nonconverged(model_fit)) {
+    nps <- NaN; npz <- NaN; mvrr <- NaN
+  } else {
     nps <- fixef(model_fit)["AMBUAMB"] + fixef(model_fit)["AMBUAMB:SZM1"]
     npz <- fixef(model_fit)["AMBUAMB"] + fixef(model_fit)["AMBUAMB:SZM2"]
     mvrr <- fixef(model_fit)["AMBUAMB"]
-    results <- rbind(results, data.frame(
-      model = onelagged,
-      ROI = roi,
-      NPS = nps,
-      NPZ = npz,
-      MVRR = mvrr,
-      IsSingular = isSingular(filler_model),
-      DeltaLogLikelihood = as.numeric(logLik(filler_model)) + 6577546 ,
-      p_metric = coef(summary(filler_model))['surprisal_p1_s', 'Pr(>|t|)'],
-      p_gpt = coef(summary(filler_model))['gpt2_surprisal', 'Pr(>|t|)'],
-      stringsAsFactors = FALSE
-    ))
-  # single <- paste0("parser_", metric, "_singleword")
-  # PredictedRT_df <- Predicting_RT_with_spillover(
-  #   rt.data,
-  #   "ClassicGP",
-  #   models = c(single),
-  #   parser_predictor_col = metric
-  # )
-  # filler_model <- readRDS(paste0('./filler_models/filler_', single, '.rds')) 
-  # for (roi in c(0, 1, 2)) {
-  #   model_fit <- lmer(predicted ~ AMBUAMB*(SZM1+SZM2) +
-  #                       (1 + AMBUAMB*(SZM1+SZM2) || item) +
-  #                       (1 | participant),
-  #                     data = subset(PredictedRT_df, model == single & ROI == roi & !is.na(RT)))
-
-  #   nps <- fixef(model_fit)["AMBUAMB"] + fixef(model_fit)["AMBUAMB:SZM1"]
-  #   npz <- fixef(model_fit)["AMBUAMB"] + fixef(model_fit)["AMBUAMB:SZM2"]
-  #   mvrr <- fixef(model_fit)["AMBUAMB"]
-  #   results <- rbind(results, data.frame(
-  #     model = single,
-  #     ROI = roi,
-  #     NPS = nps,
-  #     NPZ = npz,
-  #     MVRR = mvrr,
-  #     IsSingular = isSingular(filler_model),
-  #     DeltaLogLikelihood = as.numeric(logLik(filler_model)) + 6577546,
-  #     p_metric = coef(summary(filler_model))['surprisal_s', 'Pr(>|t|)'],
-  #     p_metric_p1 = NaN,
-  #     p_metric_p2 = NaN,
-  #     stringsAsFactors = FALSE
-  #   ))
-  # }
-
-  # spillover <- paste0("parser_", metric, "_spillover")
-  # PredictedRT_df <- Predicting_RT_with_spillover(
-  #   rt.data,
-  #   "ClassicGP",
-  #   models = c(spillover),
-  #   parser_predictor_col = metric
-  # )
-  # filler_model <- readRDS(paste0('./filler_models/filler_', spillover, '.rds')) 
-  # for (roi in c(0, 1, 2)) {
-  #   model_fit <- lmer(predicted ~ AMBUAMB*(SZM1+SZM2) +
-  #                       (1 + AMBUAMB*(SZM1+SZM2) || item) +
-  #                       (1 | participant),
-  #                     data = subset(PredictedRT_df, model == spillover & ROI == roi & !is.na(RT)))
-
-  #   nps <- fixef(model_fit)["AMBUAMB"] + fixef(model_fit)["AMBUAMB:SZM1"]
-  #   npz <- fixef(model_fit)["AMBUAMB"] + fixef(model_fit)["AMBUAMB:SZM2"]
-  #   mvrr <- fixef(model_fit)["AMBUAMB"]
-
-  #   results <- rbind(results, data.frame(
-  #     model = spillover,
-  #     ROI = roi,
-  #     NPS = nps,
-  #     NPZ = npz,
-  #     MVRR = mvrr,
-  #     IsSingular = isSingular(filler_model),
-  #     DeltaLogLikelihood = as.numeric(logLik(filler_model)) + 6577546,
-  #     p_metric = coef(summary(filler_model))['surprisal_s', 'Pr(>|t|)'],
-  #     p_metric_p1 = coef(summary(filler_model))['surprisal_p1_s', 'Pr(>|t|)'],
-  #     p_metric_p2 = coef(summary(filler_model))['surprisal_p2_s', 'Pr(>|t|)'],
-  #     stringsAsFactors = FALSE
-  #   ))
-  # }
-
-  # onelagged <- paste0("parser_", metric, "_onelagged")
-  # PredictedRT_df <- Predicting_RT_with_spillover(
-  #   rt.data,
-  #   "ClassicGP",
-  #   models = c(onelagged),
-  #   parser_predictor_col = metric
-  # )
-  # filler_model <- readRDS(paste0('./filler_models/filler_', onelagged, '.rds')) 
-  # for (roi in c(0, 1, 2)) {
-  #   model_fit <- lmer(predicted ~ AMBUAMB*(SZM1+SZM2) +
-  #                       (1 + AMBUAMB*(SZM1+SZM2) || item) +
-  #                       (1 | participant),
-  #                     data = subset(PredictedRT_df, model == onelagged & ROI == roi & !is.na(RT)))
-
-  #   nps <- fixef(model_fit)["AMBUAMB"] + fixef(model_fit)["AMBUAMB:SZM1"]
-  #   npz <- fixef(model_fit)["AMBUAMB"] + fixef(model_fit)["AMBUAMB:SZM2"]
-  #   mvrr <- fixef(model_fit)["AMBUAMB"]
-
-  #   results <- rbind(results, data.frame(
-  #     model = onelagged,
-  #     ROI = roi,
-  #     NPS = nps,
-  #     NPZ = npz,
-  #     MVRR = mvrr,
-  #     IsSingular = isSingular(filler_model),
-  #     DeltaLogLikelihood = as.numeric(logLik(filler_model)) + 6577546 ,
-  #     p_metric = NaN,
-  #     p_metric_p1 = coef(summary(filler_model))['surprisal_p1_s', 'Pr(>|t|)'],
-  #     p_metric_p2 = NaN,
-  #     stringsAsFactors = FALSE
-  #   ))
+    saveRDS(model_fit, file = file.path('results/lm_eoi_models/mergedRT/roi', paste0(model_name, '.rds')))
+    message('Saved RDS for ', model_name)
   }
-}
 
-write.csv(results, file = 'EOIs_2.csv', row.names = FALSE)
+  results <- rbind(results, data.frame(
+    model = model_name,
+    ROI = 0,
+    NPS = nps,
+    NPZ = npz,
+    MVRR = mvrr,
+    stringsAsFactors = FALSE
+  ))
+  # Persist this model's metrics to CSV immediately (append)
+  this_row <- data.frame(
+    model = model_name,
+    ROI = 0,
+    NPS = nps,
+    NPZ = npz,
+    MVRR = mvrr,
+    stringsAsFactors = FALSE,
+    check.names = FALSE
+  )
+  if (!file.exists(output_path)) {
+    tryCatch({
+      write.table(this_row, file = output_path, sep = ",", row.names = FALSE, col.names = TRUE)
+      message('Created CSV and appended ', model_name)
+    }, error = function(e) message('Failed to write CSV header for ', model_name, ': ', e$message))
+  } else {
+    tryCatch({
+      write.table(this_row, file = output_path, sep = ",", row.names = FALSE, col.names = FALSE, append = TRUE)
+      message('Appended ', model_name, ' to CSV')
+    }, error = function(e) message('Failed to append ', model_name, ' to CSV: ', e$message))
+  }
+
+}
