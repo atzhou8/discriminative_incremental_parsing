@@ -6,9 +6,10 @@ as the Driver of Garden Path Processing Difficulty](https://arxiv.org/).
 ## Setup
 Install dependencies with `pip install -r requirements.txt`
 
+## Download additional files
 Checkpoints for our parser model and baselines can be downloaded [here](https://livejohnshopkins-my.sharepoint.com/:f:/g/personal/azhou23_jh_edu/IgC7G53CTip0S7SVAxxiYrkBAY1FSYVCbejjlsoZ9UjQ2WE?e=1D6T67). Download `lightning_logs/parser/` to the root project directory to compute SBU metrics using our pretrained parser.
 
-To reproduce the results reported in our paper, additionally download `lightning_logs/synsurp/` and `lighting_logs/causal_roberta` to access our baseline models. You will also need to download SAP data from https://github.com/caplabnyu/sapbenchmark/. In particular, download the item files [items_ClassicGP.pivot.csv](https://github.com/caplabnyu/sapbenchmark/blob/main/Surprisals/data/items_ClassicGP.pivot.csv) and [items_filler.pivot.csv](https://github.com/caplabnyu/sapbenchmark/blob/main/Surprisals/data/items_filler.pivot.csv) to `data/phenomena/SAP/items/`, as well as the SPR data `ClassicGardenPathSet.csv` and `Fillers.csv` from their Google Drive link to `r_analyses/items/`. 
+To reproduce the results reported in our paper, additionally download `lightning_logs/synsurp/` and `lighting_logs/causal_roberta` to access our baseline models. You will also need to download SAP data from https://github.com/caplabnyu/sapbenchmark/. In particular, download the item files [items_ClassicGP.pivot.csv](https://github.com/caplabnyu/sapbenchmark/blob/main/Surprisals/data/items_ClassicGP.pivot.csv) and [items_filler.pivot.csv](https://github.com/caplabnyu/sapbenchmark/blob/main/Surprisals/data/items_filler.pivot.csv) to `data/phenomena/SAP/items/`. Then, download `ClassicGardenPathSet.csv` and `Fillers.csv` from the Google Drive link to `r_analyses/items/`. 
 
 We have also provided our fitted `lme4` and `brms` models [here](https://livejohnshopkins-my.sharepoint.com/:f:/g/personal/azhou23_jh_edu/IgAQ1dl-U_XeQ6ucJUjLqAXfAYI3PBl_YPjG2CxTYntBARM), as the `brms` models in particular are expensive to fit.
 
