@@ -145,7 +145,7 @@ def load_gold_trees(word_rows, ambiguous_gold_path=None, unambiguous_gold_path=N
             .drop_duplicates()
             .tolist()
         )
-        assert len(amb_trees) == len(amb_sentence_indices):
+        assert len(amb_trees) == len(amb_sentence_indices)
         amb_tree_map = dict(zip(amb_sentence_indices, amb_trees))
         for index, row in word_rows.iterrows():
             if row['ambiguity'] == 'ambiguous':
@@ -159,7 +159,7 @@ def load_gold_trees(word_rows, ambiguous_gold_path=None, unambiguous_gold_path=N
             .drop_duplicates()
             .tolist()
         )
-        assert len(unamb_trees) == len(unamb_sentence_indices):
+        assert len(unamb_trees) == len(unamb_sentence_indices)
         unamb_tree_map = dict(zip(unamb_sentence_indices, unamb_trees))
         for index, row in word_rows.iterrows():
             if row['ambiguity'] == 'unambiguous':
