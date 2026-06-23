@@ -6,7 +6,7 @@ as the Driver of Garden Path Processing Difficulty](https://arxiv.org/).
 ## Setup
 Install dependencies with `pip install -r requirements.txt`
 
-Checkpoints for our parser model and baselines can be downloaded [here](https://livejohnshopkins-my.sharepoint.com/:f:/g/personal/azhou23_jh_edu/IgC7G53CTip0S7SVAxxiYrkBAY1FSYVCbejjlsoZ9UjQ2WE?e=1D6T67). To use our pretrained parser to obtain syntactic belief update estimates on new text data, download `lightning_logs/parser/` to the root project directory.
+Checkpoints for our parser model and baselines can be downloaded [here](https://livejohnshopkins-my.sharepoint.com/:f:/g/personal/azhou23_jh_edu/IgC7G53CTip0S7SVAxxiYrkBAY1FSYVCbejjlsoZ9UjQ2WE?e=1D6T67). Download `lightning_logs/parser/` to the root project directory to compute SBU metrics using our pretrained parser.
 
 To reproduce the results reported in our paper, additionally download `lightning_logs/synsurp/` and `lighting_logs/causal_roberta` to access our baseline models. You will also need to download SAP data from https://github.com/caplabnyu/sapbenchmark/. In particular, download the item files [items_ClassicGP.pivot.csv](https://github.com/caplabnyu/sapbenchmark/blob/main/Surprisals/data/items_ClassicGP.pivot.csv) and [items_filler.pivot.csv](https://github.com/caplabnyu/sapbenchmark/blob/main/Surprisals/data/items_filler.pivot.csv) to `data/phenomena/SAP/items/`, as well as the SPR data `ClassicGardenPathSet.csv` and `Fillers.csv` from their Google Drive link to `r_analyses/items/`. 
 
