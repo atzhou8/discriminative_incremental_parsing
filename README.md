@@ -3,28 +3,37 @@
 This repository holds code for the paper [Syntactic Belief Update
 as the Driver of Garden Path Processing Difficulty](https://arxiv.org/).
 
-Checkpoints for our parser model and baselines can be downloaded [here](https://drive.google.com/).
+## Setup
+Install dependencies with `pip install -r requirements.txt`
 
-Large `brms` model files used for our statistical analyses can be downloaded [here](https://drive.google.com/).
+Checkpoints for our parser model and baselines can be downloaded [here](https://livejohnshopkins-my.sharepoint.com/:f:/g/personal/azhou23_jh_edu/IgC7G53CTip0S7SVAxxiYrkBAY1FSYVCbejjlsoZ9UjQ2WE?e=1D6T67). To use our pretrained parser to obtain syntactic belief update estimates on new text data, download `lightning_logs/parser/` to the root project directory.
+
+To reproduce the results reported in our paper, additionally download `lightning_logs/synsurp/` and `lighting_logs/causal_roberta` to access our baseline models. You will also need to download SAP data from https://github.com/caplabnyu/sapbenchmark/. In particular, download the item files [items_ClassicGP.pivot.csv](https://github.com/caplabnyu/sapbenchmark/blob/main/Surprisals/data/items_ClassicGP.pivot.csv) and [items_filler.pivot.csv](https://github.com/caplabnyu/sapbenchmark/blob/main/Surprisals/data/items_filler.pivot.csv) to `data/phenomena/SAP/items/`, as well as the SPR data `ClassicGardenPathSet.csv` and `Fillers.csv` from their Google Drive link to `r_analyses/items/`. 
+
+We have also provided our fitted `lme4` and `brms` models [here](https://livejohnshopkins-my.sharepoint.com/:f:/g/personal/azhou23_jh_edu/IgAQ1dl-U_XeQ6ucJUjLqAXfAYI3PBl_YPjG2CxTYntBARM), as the `brms` models in particular are expensive to fit.
 
 ## Obtaining Syntactic Belief Update metrics for arbitrary text data
-Download our pretrained parser checkpoint to `lightning_logs/` or train a new model using
+
+### Using pretrained model
+To use our pretrained parser, download the provided parser checkpoints in the previous section. Then, run `compute_metrics_for_sentences.py` to compute SBU metrics given a text file that contains one sentence per line:
+```
+python compute_metrics_for_sentences.py -n parser -i sentences.txt -o output.csv
+```
+This will output a csv with a column for each word, as well as a column for each SBU metric (`kl_backward` for KL Divergence, and `renyi_divergence_backward_n` for Rényi Divergences with different parameters $\alpha$)
+
+### Training a new parser from scratch
+Alternatively, train a new model using
 ```
 python train_parser.py NAME -train TRAIN_DIR -val VAL_DIR 
 ```
 where `TRAIN_DIR` and `VAL_DIR` are expected to be treebanks in the CoNLL-U format.
 
-Then, run `compute_metrics_for_sentences.py` to compute SBU metrics given a text file that contains one sentence per line:
+Then, obtain SBU estimates with:
 ```
 python compute_metrics_for_sentences.py -n NAME -i sentences.txt -o output.csv
 ```
 
-This will output a csv with a column for each word, as well as a column for each SBU metric (`kl_backward` for KL Divergence, and `renyi_divergence_backward_n` for Rényi Divergences with different parameters $\alpha$)
-
 ## Reproducing results reported in the paper
-Download pretrained models to `lightning_logs\`
-
-Download SAP benchmark items csvs to `data\phenomena\SAP\items\`
 
 ### Compute metrics:
 1. Compute SBU metrics:
@@ -44,13 +53,13 @@ Download SAP benchmark items csvs to `data\phenomena\SAP\items\`
 2. Compute syntactic surprisal metrics:
     ```
     python compute_synsurp_for_items.py \
-    -n parser \
+    -n synsurp/silver \
     -v 0 \
     -i data/phenomena/SAP/items/items_ClassicGP.pivot.csv \
     -o out/parser/items_ClassicGP.synsurp.csv
 
     python compute_synsurp_for_items.py \
-    -n parser \
+    -n synsurp/silver \
     -v 0 \
     -i data/phenomena/SAP/items/items_filler.pivot.csv \
     -o out/parser/items_filler.synsurp.csv
@@ -59,12 +68,12 @@ Download SAP benchmark items csvs to `data\phenomena\SAP\items\`
     ```
     python compute_causal_roberta_surprisal_for_items.py \
     -i data/phenomena/SAP/items/items_ClassicGP.pivot.csv \
-    -o data/phenomena/SAP/items/items_ClassicGP.word_surp.csv \
+    -o out/causal_roberta/items_ClassicGP.word_surp.csv \
     -m lightning_logs/causal_roberta/checkpoint-1200
 
     python compute_causal_roberta_surprisal_for_items.py \
     -i data/phenomena/SAP/items/items_filler.pivot.csv \
-    -o data/phenomena/SAP/items/items_filler.word_surp.csv \
+    -o out/causal_roberta/items_filler.word_surp.csv \
     -m lightning_logs/causal_roberta/checkpoint-1200
     ```
 
@@ -75,7 +84,7 @@ cd into the `r_analyses` directory to run statistical analyses
     cd r_analyses
     python get_mergedRT.py predictors/ClassicGardenPathSet.csv predictors/ClassicGardenPathSet_merged.csv
     python get_mergedRT.py predictors/Fillers.csv predictors/Fillers_merged.csv
-    python combine_metrics.py
+    python combine_predictors.py
     ```
 2. Fit linear mixed effects models for predicting reading times
     ```
@@ -86,7 +95,7 @@ cd into the `r_analyses` directory to run statistical analyses
 
 3. Fit Bayesian mixed effects models for estimating garden path effect.
 
-    (**Warning**: these models take a very long time to sample, we recommend downloading prefit brms models [here](drive.google.com))
+    (**Warning**: these models take a very long time to sample, we recommend downloading prefit brms models)
     ```
     Rscript fit_mergedEOI_brms_from_empirical.R
     Rscript fit_mergedEOI_brms_from_mergedlms.R \
