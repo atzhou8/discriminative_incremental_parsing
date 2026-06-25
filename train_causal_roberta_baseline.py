@@ -4,7 +4,7 @@ from pathlib import Path
 import torch
 from torch.utils.data import DataLoader
 
-from model.dataset import TreebankDataset
+from models.datasets import TreebankDataset
 from transformers import RobertaForCausalLM, RobertaTokenizer, AutoConfig, \
     DataCollatorForLanguageModeling, Trainer, TrainingArguments, EarlyStoppingCallback
 

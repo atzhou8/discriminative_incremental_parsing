@@ -7,12 +7,9 @@ from pytorch_lightning.callbacks import ModelCheckpoint, EarlyStopping
 from pytorch_lightning.loggers import TensorBoardLogger
 from torch.utils.data import DataLoader
 
-from model.synsurp_baseline import (
-    SynSurpDataset,
-    SynSurpRoBERTa,
-    synsurp_collator,
-    get_vocab_from_text,
-)
+from models.roberta_tagger import SynSurpRoBERTa
+from models.datasets import SynSurpDataset, synsurp_collator
+from models.utils import get_vocab_from_text
 
 torch.set_float32_matmul_precision('medium')
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')

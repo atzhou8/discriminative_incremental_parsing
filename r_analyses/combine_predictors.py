@@ -1,3 +1,5 @@
+import pandas as pd
+
 dataset = 'ClassicGP'
 
 def combine_predictors(dataset):

@@ -429,7 +429,7 @@ class Parser(pl.LightningModule):
                     else:
                         y_np = y_pred.cpu().numpy()
                     g_np = gold_trees.cpu().numpy()
-                    lengths_np = lengths.cpu().numpy()
+                    lengths_np = lengths.cpu().numpy() # type: ignore
                     for i in range(y_np.shape[0]):
                         n = y_np.shape[1]
                         mask = np.arange(n) < lengths_np[i]
@@ -444,7 +444,7 @@ class Parser(pl.LightningModule):
             else:
                 tree_acc = node_acc = probs = entropy = 0
 
-            self.test_predictions.extend(zip(cut_sentences, y_pred.cpu().numpy()))
+            self.test_predictions.extend(zip(cut_sentences, y_pred.cpu().numpy())) # type: ignore
             self.cutoffs.extend(cutoffs)
             self.tree_acc += tree_acc
             self.tree_total += 1
@@ -466,7 +466,6 @@ class Parser(pl.LightningModule):
         tensors_to_conllu(
             [sentence for sentence, _ in self.test_predictions],
             [tree for _, tree in self.test_predictions],
-            self.cutoffs,
             self.prediction_savepath    
         )
         self.prediction_savepath = None 

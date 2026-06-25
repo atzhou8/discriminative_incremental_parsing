@@ -86,7 +86,7 @@ if __name__ == '__main__':
 
     tokenizer = RobertaTokenizerFast.from_pretrained(args.model_name_or_path, add_prefix_space=True)
     model = AutoModelForCausalLM.from_pretrained(args.model_name_or_path)
-    model.to(device)
+    model.to(device) # type: ignore
     model.eval()
 
     items_df = pd.read_csv(args.input_csv)

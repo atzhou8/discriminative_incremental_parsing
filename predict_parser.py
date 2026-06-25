@@ -6,8 +6,8 @@ from pathlib import Path
 from pytorch_lightning import Trainer
 from pytorch_lightning.loggers import TensorBoardLogger
 
-from model.parser import Parser
-from model.utils import build_loader
+from models.parser import Parser
+from models.utils import build_loader
 
 torch.set_float32_matmul_precision('medium')
 

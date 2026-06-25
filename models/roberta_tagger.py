@@ -2,51 +2,8 @@ import torch
 import torch.nn.functional as f
 import pytorch_lightning as pl
 
-from pathlib import Path
-from collections import Counter
-from torch.utils.data import Dataset
 from transformers import AutoConfig, RobertaForCausalLM, RobertaTokenizerFast
 from einops import repeat
-
-
-def get_vocab_from_text(file_name, min_count=1, add_oov=False):
-    tag_seqs = Path(file_name).read_text(encoding='utf-8').splitlines()
-    counter = Counter()
-    for seq in tag_seqs:
-        if not seq:
-            continue
-        counter.update(seq.split())
-
-    tags = [tag for tag, cnt in counter.items() if cnt >= min_count]
-    tags.extend(['<bos>', '<eos>', '<oov>'])
-
-    return sorted(tags)
-
-
-class SynSurpDataset(Dataset):
-
-    def __init__(self, sentence_dir, tag_dir):
-        self.all_tags = Path(tag_dir).read_text(encoding='utf-8').splitlines()
-        self.all_sentences = Path(sentence_dir).read_text(encoding='utf-8').splitlines()
-
-        assert len(self.all_tags) == len(self.all_sentences)
-
-    def __len__(self):
-        return len(self.all_tags)
-    
-    def __getitem__(self, idx):
-        tags = self.all_tags[idx].split(' ')
-        words = self.all_sentences[idx].split(' ')
-        assert(len(tags) == len(words))
-        return words, tags
-
-def synsurp_collator(batch):
-    sentences, tags = zip(*batch)
-    return {
-        'sentences': sentences,
-        'tags': tags
-    }
-
 
 class SynSurpRoBERTa(pl.LightningModule):
 

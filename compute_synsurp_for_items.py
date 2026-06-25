@@ -7,7 +7,7 @@ import pandas as pd
 import torch
 import torch.nn.functional as F
 from einops import rearrange
-from model.synsurp_baseline import SynSurpRoBERTa
+from models.roberta_tagger import SynSurpRoBERTa
 
 
 def compute_word_surprisals_for_sentence(sentence, model, device, kl=False):

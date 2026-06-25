@@ -10,9 +10,9 @@ from pytorch_lightning.loggers import TensorBoardLogger
 from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint
 from torch.utils.data import DataLoader
 
-from model.dataset import TreebankDataset, treebank_collater
-from model.parser import Parser
-from model.utils import build_loader
+from models.datasets import TreebankDataset, treebank_collater
+from models.parser import Parser
+from models.utils import build_loader
 
 torch.set_float32_matmul_precision('medium')
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')

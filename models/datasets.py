@@ -1,6 +1,8 @@
 import torch
 import pandas as pd
 
+from pathlib import Path
+
 from torch.utils.data import Dataset
 from torch.nn.utils.rnn import pad_sequence
 from stanza.utils.conll import CoNLL
@@ -103,4 +105,28 @@ def phenomena_collater(batch, cutoff_transform=None):
         'cutoffs': cutoff_transform(cutoffs),
         'conditions': conditions,
         'gold_adjuncts': None
+    }
+
+class SynSurpDataset(Dataset):
+
+    def __init__(self, sentence_dir, tag_dir):
+        self.all_tags = Path(tag_dir).read_text(encoding='utf-8').splitlines()
+        self.all_sentences = Path(sentence_dir).read_text(encoding='utf-8').splitlines()
+
+        assert len(self.all_tags) == len(self.all_sentences)
+
+    def __len__(self):
+        return len(self.all_tags)
+    
+    def __getitem__(self, idx):
+        tags = self.all_tags[idx].split(' ')
+        words = self.all_sentences[idx].split(' ')
+        assert(len(tags) == len(words))
+        return words, tags
+
+def synsurp_collator(batch):
+    sentences, tags = zip(*batch)
+    return {
+        'sentences': sentences,
+        'tags': tags
     }

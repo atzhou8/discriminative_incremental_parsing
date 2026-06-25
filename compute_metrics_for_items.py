@@ -11,8 +11,8 @@ from stanza.utils.conll import CoNLL
 from torch.nn.utils.rnn import pad_sequence
 
 
-from model.parser import Parser
-from model.utils import get_info_metrics, uniform_dist_like, recovered_dist_like
+from models.parser import Parser
+from models.parser_info_metrics import get_info_metrics, uniform_dist_like, recovered_dist_like
 
 INFO_METRICS_TO_SAVE = [
     'kl_backward',
@@ -272,7 +272,7 @@ def add_info_metrics_all(
                     cutoffs=batch['cutoffs']
                 )
                 gold_metrics = get_info_metrics(dist_before, dist_gold)
-                recovered_trees = dist_gold.argmax.detach().cpu().numpy()
+                recovered_trees = dist_gold.argmax.detach().cpu().numpy() # type: ignore
 
                 if is_adjunct is not None:
                     is_adjunct = torch.sigmoid(is_adjunct).squeeze(-1).cpu().numpy().tolist()

@@ -8,7 +8,7 @@ class EmbeddingModel(torch.nn.Module):
     tokenizations and embeddings.
     """
 
-    def __init__(self, model_name, device, out_layer=-6):
+    def __init__(self, model_name, device, out_layer=-1):
         super().__init__()
         self.device = device
         self.tokenizer = RobertaTokenizerFast.from_pretrained(
