@@ -107,12 +107,12 @@ def phenomena_collater(batch, cutoff_transform=None):
         'gold_adjuncts': None
     }
 
-class SynSurpDataset(Dataset):
+class SupertagDataset(Dataset):
 
-    def __init__(self, sentence_dir, tag_dir):
+    def __init__(self, sentence_dir, tag_dir, tagset=None):
         self.all_tags = Path(tag_dir).read_text(encoding='utf-8').splitlines()
         self.all_sentences = Path(sentence_dir).read_text(encoding='utf-8').splitlines()
-
+        self.tagset = tagset
         assert len(self.all_tags) == len(self.all_sentences)
 
     def __len__(self):
@@ -121,12 +121,21 @@ class SynSurpDataset(Dataset):
     def __getitem__(self, idx):
         tags = self.all_tags[idx].split(' ')
         words = self.all_sentences[idx].split(' ')
+        if self.tagset is not None:
+            tags = [tag if tag in self.tagset else '<oov>' for tag in tags]
+        
         assert(len(tags) == len(words))
-        return words, tags
+        length = len(tags)
 
-def synsurp_collator(batch):
-    sentences, tags = zip(*batch)
+
+
+        return words, tags, length
+
+def supertag_collator(batch):
+    sentences, tags, lengths = zip(*batch)
+    lengths = torch.tensor(list(lengths), dtype=torch.int64)
     return {
         'sentences': sentences,
-        'tags': tags
+        'tags': tags,
+        'lengths': lengths
     }

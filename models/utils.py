@@ -18,7 +18,7 @@ def get_vocab_from_text(file_name, min_count=1):
         counter.update(seq.split())
 
     tags = [tag for tag, cnt in counter.items() if cnt >= min_count]
-    tags.extend(['<bos>', '<eos>', '<oov>'])
+    tags = ['<oov>'] + tags + ['<bos>', '<eos>']
 
     return sorted(tags)
 

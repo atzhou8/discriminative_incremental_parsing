@@ -3,7 +3,7 @@ from typing import Any
 import torch
 import pytorch_lightning as pl
 
-from torch_struct import LinearChainCRF, LinearChain
+from supar import LinearChainCRF
 from transformers import RobertaTokenizerFast, RobertaModel
 from einops import repeat, rearrange
 
@@ -14,6 +14,7 @@ class LinearChainCRFSuperTagger(pl.LightningModule):
         self,
         model_name,
         ccg_tagset,
+        learning_rate,
     ):
         super().__init__()
         self.tokenizer = RobertaTokenizerFast.from_pretrained(
@@ -26,7 +27,11 @@ class LinearChainCRFSuperTagger(pl.LightningModule):
             trust_remote_code=False,
         )
         self.hidden_dim = self.model.config.hidden_size
+        self.tagset = ccg_tagset
+        self.id2tag = {i: t for i, t in enumerate(ccg_tagset)}
+        self.tag2id = {t: i for i, t in enumerate(ccg_tagset)}
         self.num_tags = len(ccg_tagset)
+        self.learning_rate = learning_rate
 
         # tag prediction head
         self.supertagging_head = torch.nn.Sequential(
@@ -39,17 +44,17 @@ class LinearChainCRFSuperTagger(pl.LightningModule):
         )
 
         # tag transition matrix
-        self.tag_transitions = torch.nn.Parameter(
-            torch.empty(self.num_tags, self.num_tags)
+        self.transitions = torch.nn.Parameter(
+            torch.empty(self.num_tags+1, self.num_tags+1)
         )
-        torch.nn.init.xavier_uniform_(self.tag_transitions)
-        
+        torch.nn.init.xavier_uniform_(self.transitions)
+        self.save_hyperparameters()
+    
     def forward(self, batch):
         """ Output B x L x |C| of log potentials.
         """
         sentences = batch['sentences']
-        tags = batch['tags']
-        lengths = torch.tensor([len(sentence) for sentence in sentences]).to(self.device)
+        lengths = batch['lengths']
         batch_size = len(sentences)
 
         tokens = self.tokenizer(
@@ -66,25 +71,73 @@ class LinearChainCRFSuperTagger(pl.LightningModule):
         ).hidden_states[-1]
         
         # Pool token embeddings to word level
-        word_embeddings, max_word_id = self._tokens_to_words(roberta_output, tokens, batch_size)
+        word_embeddings, _ = self._tokens_to_words(roberta_output, tokens, batch_size)
         emissions = self.supertagging_head(word_embeddings)
+        crf = LinearChainCRF(emissions, self.transitions, lengths)
 
-
+        # OLD: trying to use torch_struct
         # log_potentials (N-1) x C_n+1 x C_n 
         # log_potential(c_i -> c_j) = score(c_j) + trans(c_i, c_j)
-        emissions = rearrange(emissions, 'b n c -> b n c 1')
-        transitions = rearrange(self.tag_transitions, 'curr prev -> 1 1 curr prev')
-        log_potentials = emissions + transitions
-        crf = LinearChainCRF(log_potentials, lengths)
+        # emissions = rearrange(emissions, 'b n c -> b n c 1')
+        # transitions = rearrange(self.tag_transitions, 'curr prev -> 1 1 curr prev')
+        # log_potentials = emissions + transitions
+        # log_potentials[:, 0, :, :] = emissions[:, 0, :, :]
+        # crf = LinearChainCRF(log_potentials, lengths)
+        return crf
     
     def training_step(self, batch, batch_idx):
         crf = self.forward(batch)
-        tags = batch['tags']
-
-        log_prob = crf.log_prob
-
-
+        tags = self._tags_to_vector(batch['tags'])
+        lengths = batch['lengths']
+        batch_size = len(lengths)
         
+        log_prob = (-crf.log_prob(tags)).mean()
+        pred = crf.argmax
+        acc = self._tag_accuracy(pred, tags, lengths)
+
+        self.log('train log probs', -log_prob, batch_size=batch_size)
+        self.log('train acc', acc, batch_size=batch_size)
+        return (-log_prob).mean()
+
+    def validation_step(self, batch, batch_idx):
+        crf = self.forward(batch)
+        tags = self._tags_to_vector(batch['tags'])
+        lengths = batch['lengths']
+        batch_size = len(lengths)
+
+        log_prob = (-crf.log_prob(tags)).mean()
+        pred = crf.argmax
+        acc = self._tag_accuracy(pred, tags, lengths)
+
+        self.log('val log probs', -log_prob, batch_size=batch_size)
+        self.log('val acc', acc, batch_size=batch_size)
+        return log_prob
+
+    def configure_optimizers(self):
+        opt = torch.optim.Adam(self.parameters(), lr=self.learning_rate)
+        return opt
+
+    def _tag_accuracy(self, pred, labels, lengths):
+        assert pred.shape == labels.shape
+        mask = torch.arange(pred.shape[1], device=pred.device)[None, :] < lengths[:, None]
+        correct = (pred.eq(labels) & mask).sum().float()
+        total = mask.sum().clamp_min(1).float()
+        return correct / total
+
+    def _tags_to_vector(self, tags):
+        batch_size = len(tags)
+        max_len = max([len(seq) for seq in tags])
+        tag_vector = torch.zeros((batch_size, max_len), dtype=torch.int32)
+        for b in range(batch_size):
+            tag_seq_ids = [self.tag2id[tag] for tag in tags[b]]
+            tag_seq_ids += [0] * (max_len - len(tags[b]))
+            tag_vector[b] = torch.tensor(tag_seq_ids, dtype=torch.int32)
+
+        return tag_vector.to(self.device) 
+
+    def _vector_to_tags(self, vector):
+        pass
+    
     def _tokens_to_words(self, token_embeddings, tokenized, batch_size):
         """Combines tokens into words by meaning, following same logic as
         embedding_model.py
@@ -98,7 +151,6 @@ class LinearChainCRFSuperTagger(pl.LightningModule):
         valid = (batch_word_ids > 0)
         valid[:, 0] = True 
 
-        
         max_word_id = batch_word_ids.max().item()
         hidden_size = token_embeddings.shape[-1]        
         word_embeddings = torch.zeros(
@@ -125,9 +177,8 @@ class LinearChainCRFSuperTagger(pl.LightningModule):
         mask = repeat(counts != 0, 'b n -> b n d', d=hidden_size)
         word_embeddings = word_embeddings / denom
         word_embeddings = word_embeddings * mask
-        word_embeddings[:, 0, :] = token_embeddings[:, 0, :] 
         
-        return word_embeddings, max_word_id
+        return word_embeddings[:, 1:, :], max_word_id
     
 
 

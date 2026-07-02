@@ -7,18 +7,17 @@ from pytorch_lightning.callbacks import ModelCheckpoint, EarlyStopping
 from pytorch_lightning.loggers import TensorBoardLogger
 from torch.utils.data import DataLoader
 
-from models.roberta_tagger import SynSurpRoBERTa
-from models.datasets import SynSurpDataset, synsurp_collator
+from models.lc_crf_tagger import LinearChainCRFSuperTagger
+from models.datasets import SupertagDataset, supertag_collator
 from models.utils import get_vocab_from_text
 
 torch.set_float32_matmul_precision('medium')
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 ROOT = Path(__file__).resolve().parent
-data_dir = ROOT / 'data' / 'treebanks' / 'SUD_English-EWT+GUM+Reddit+LinES+PUD'
 ccg_dir = ROOT / 'data' / 'treebanks' / 'ccgbank'
-train_sentences = data_dir / 'en_ewtgumredditlinespud-sentences.txt'
-train_tags = data_dir / 'en_ewtgumredditlinespud-ccgtags.txt'
+train_sentences = ccg_dir / 'train.words'
+train_tags = ccg_dir / 'train.stags'
 dev_tags = ccg_dir / 'dev.stags'
 dev_sentences = ccg_dir / 'dev.words'
 
@@ -39,21 +38,22 @@ parser.add_argument('-v', '--version_number', type=int, default=None)
 
 if __name__ == '__main__':
     args = parser.parse_args()
-
-    train_dataset = SynSurpDataset(
+    ccg_tags = get_vocab_from_text(args.train_tags)
+    train_dataset = SupertagDataset(
         sentence_dir=args.train_sentences,
         tag_dir=args.train_tags,
+        tagset=ccg_tags,
     )
-    val_dataset = SynSurpDataset(
+    val_dataset = SupertagDataset(
         sentence_dir=args.val_sentences,
         tag_dir=args.val_tags,
+        tagset=ccg_tags
     )
-
     train_loader = DataLoader(
         train_dataset,
         batch_size=args.batch_size,
         shuffle=True,
-        collate_fn=synsurp_collator,
+        collate_fn=supertag_collator,
         num_workers=0,
         pin_memory=True,
     )
@@ -61,30 +61,21 @@ if __name__ == '__main__':
         val_dataset,
         batch_size=args.batch_size,
         shuffle=False,
-        collate_fn=synsurp_collator,
+        collate_fn=supertag_collator,
         num_workers=0,
         pin_memory=True,
     )
 
-    ccg_tags = get_vocab_from_text(args.train_tags)
-    words = get_vocab_from_text(
-        args.train_sentences,
-        min_count=args.min_word_count,
-    )
-
-    model = SynSurpRoBERTa(
+    model = LinearChainCRFSuperTagger(
         model_name=args.model_name,
         ccg_tagset=ccg_tags,
-        wordset=words,
-        learning_rate=args.learning_rate,
+        learning_rate=args.learning_rate
     )
-
     logger = TensorBoardLogger(
         save_dir='lightning_logs',
         name=args.name,
         version=args.version_number,
     )
-
     trainer = Trainer(
         accelerator='gpu' if device.type == 'cuda' else 'cpu',
         max_epochs=args.epochs,
@@ -94,16 +85,11 @@ if __name__ == '__main__':
         precision='bf16-mixed',
         callbacks=[
             ModelCheckpoint(
-                monitor='val loss',
-                mode='min',
+                monitor='val log probs',
+                mode='max',
                 save_top_k=1,
                 filename='best_val_{epoch:02d}',
                 save_last=True,
-            ),
-            EarlyStopping(
-                monitor='val loss',
-                mode='min',
-                patience=100,
             ),
             ModelCheckpoint(
                 filename='last',
