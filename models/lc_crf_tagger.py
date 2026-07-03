@@ -95,9 +95,9 @@ class LinearChainCRFSuperTagger(pl.LightningModule):
         pred = crf.argmax
         acc = self._tag_accuracy(pred, tags, lengths)
 
-        self.log('train log probs', -log_prob, batch_size=batch_size)
+        self.log('train log probs', -log_prob, batch_size=batch_size, prog_bar=True)
         self.log('train acc', acc, batch_size=batch_size)
-        return (-log_prob).mean()
+        return log_prob
 
     def validation_step(self, batch, batch_idx):
         crf = self.forward(batch)
@@ -109,13 +109,23 @@ class LinearChainCRFSuperTagger(pl.LightningModule):
         pred = crf.argmax
         acc = self._tag_accuracy(pred, tags, lengths)
 
-        self.log('val log probs', -log_prob, batch_size=batch_size)
-        self.log('val acc', acc, batch_size=batch_size)
+        self.log('val log probs', -log_prob, batch_size=batch_size, prog_bar=True)
+        self.log('val acc', acc, batch_size=batch_size, prog_bar=True)
         return log_prob
 
     def configure_optimizers(self):
         opt = torch.optim.Adam(self.parameters(), lr=self.learning_rate)
         return opt
+
+    def _split_prefix(self, words, tags, lengths):
+        cutoffs = torch.randint(1, lengths.max().item(), size=(batch_size,), device=self.device)
+        cutoffs = (cutoffs % (lengths - 1)) + 1
+        for i, cutoff in enumerate(cutoffs):
+            words[i] = word[:cutoff-1] + ['<mask>']
+
+        return words, cutoffs
+
+
 
     def _tag_accuracy(self, pred, labels, lengths):
         assert pred.shape == labels.shape
@@ -127,11 +137,11 @@ class LinearChainCRFSuperTagger(pl.LightningModule):
     def _tags_to_vector(self, tags):
         batch_size = len(tags)
         max_len = max([len(seq) for seq in tags])
-        tag_vector = torch.zeros((batch_size, max_len), dtype=torch.int32)
+        tag_vector = torch.zeros((batch_size, max_len), dtype=torch.long)
         for b in range(batch_size):
             tag_seq_ids = [self.tag2id[tag] for tag in tags[b]]
             tag_seq_ids += [0] * (max_len - len(tags[b]))
-            tag_vector[b] = torch.tensor(tag_seq_ids, dtype=torch.int32)
+            tag_vector[b] = torch.tensor(tag_seq_ids, dtype=torch.long)
 
         return tag_vector.to(self.device) 
 
