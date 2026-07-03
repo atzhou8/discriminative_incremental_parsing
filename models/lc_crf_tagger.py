@@ -15,6 +15,7 @@ class LinearChainCRFSuperTagger(pl.LightningModule):
         model_name,
         ccg_tagset,
         learning_rate,
+        split_prob,
     ):
         super().__init__()
         self.tokenizer = RobertaTokenizerFast.from_pretrained(
@@ -32,6 +33,7 @@ class LinearChainCRFSuperTagger(pl.LightningModule):
         self.tag2id = {t: i for i, t in enumerate(ccg_tagset)}
         self.num_tags = len(ccg_tagset)
         self.learning_rate = learning_rate
+        self.split_prob = split_prob
 
         # tag prediction head
         self.supertagging_head = torch.nn.Sequential(
@@ -86,10 +88,17 @@ class LinearChainCRFSuperTagger(pl.LightningModule):
         return crf
     
     def training_step(self, batch, batch_idx):
-        crf = self.forward(batch)
-        tags = self._tags_to_vector(batch['tags'])
+        sentences = batch['sentences']
         lengths = batch['lengths']
-        batch_size = len(lengths)
+        split_prefix = torch.rand(1).item() < self.split_prob
+        if split_prefix:
+            batch_size = len(lengths)
+            cut_sentences, lengths = self._split_prefix(sentences, lengths)
+            batch['sentences'] = cut_sentences
+            batch['lengths'] = lengths
+        
+        crf = self.forward(batch)
+        tags = self._tags_to_vector(batch['tags'], lengths)
         
         log_prob = (-crf.log_prob(tags)).mean()
         pred = crf.argmax
@@ -101,8 +110,8 @@ class LinearChainCRFSuperTagger(pl.LightningModule):
 
     def validation_step(self, batch, batch_idx):
         crf = self.forward(batch)
-        tags = self._tags_to_vector(batch['tags'])
         lengths = batch['lengths']
+        tags = self._tags_to_vector(batch['tags'], lengths)
         batch_size = len(lengths)
 
         log_prob = (-crf.log_prob(tags)).mean()
@@ -117,15 +126,16 @@ class LinearChainCRFSuperTagger(pl.LightningModule):
         opt = torch.optim.Adam(self.parameters(), lr=self.learning_rate)
         return opt
 
-    def _split_prefix(self, words, tags, lengths):
+    def _split_prefix(self, sentences, lengths):
+        batch_size = len(lengths)
         cutoffs = torch.randint(1, lengths.max().item(), size=(batch_size,), device=self.device)
         cutoffs = (cutoffs % (lengths - 1)) + 1
+        cut_sentences = []
         for i, cutoff in enumerate(cutoffs):
-            words[i] = word[:cutoff-1] + ['<mask>']
+            sentence = sentences[i]
+            cut_sentences.append(sentence[:cutoff-1] + ['<mask>'])
 
-        return words, cutoffs
-
-
+        return cut_sentences, cutoffs
 
     def _tag_accuracy(self, pred, labels, lengths):
         assert pred.shape == labels.shape
@@ -134,13 +144,14 @@ class LinearChainCRFSuperTagger(pl.LightningModule):
         total = mask.sum().clamp_min(1).float()
         return correct / total
 
-    def _tags_to_vector(self, tags):
+    def _tags_to_vector(self, tags, lengths):
         batch_size = len(tags)
-        max_len = max([len(seq) for seq in tags])
+        max_len = max(lengths)
         tag_vector = torch.zeros((batch_size, max_len), dtype=torch.long)
         for b in range(batch_size):
             tag_seq_ids = [self.tag2id[tag] for tag in tags[b]]
-            tag_seq_ids += [0] * (max_len - len(tags[b]))
+            tag_seq_ids = tag_seq_ids[:lengths[b]]
+            tag_seq_ids += [0] * (max_len - len(tag_seq_ids))
             tag_vector[b] = torch.tensor(tag_seq_ids, dtype=torch.long)
 
         return tag_vector.to(self.device) 
