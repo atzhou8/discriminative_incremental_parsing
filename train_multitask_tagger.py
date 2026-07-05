@@ -7,8 +7,8 @@ from pytorch_lightning.callbacks import ModelCheckpoint, EarlyStopping
 from pytorch_lightning.loggers import TensorBoardLogger
 from torch.utils.data import DataLoader
 
-from models.roberta_tagger import SynSurpRoBERTa
-from models.datasets import SynSurpDataset, synsurp_collator
+from models.multitask_tagger import SynSurpRoBERTa
+from models.datasets import SupertagDataset, supertag_collator
 from models.utils import get_vocab_from_text
 
 torch.set_float32_matmul_precision('medium')
@@ -40,11 +40,11 @@ parser.add_argument('-v', '--version_number', type=int, default=None)
 if __name__ == '__main__':
     args = parser.parse_args()
 
-    train_dataset = SynSurpDataset(
+    train_dataset = SupertagDataset(
         sentence_dir=args.train_sentences,
         tag_dir=args.train_tags,
     )
-    val_dataset = SynSurpDataset(
+    val_dataset = SupertagDataset(
         sentence_dir=args.val_sentences,
         tag_dir=args.val_tags,
     )
@@ -53,7 +53,7 @@ if __name__ == '__main__':
         train_dataset,
         batch_size=args.batch_size,
         shuffle=True,
-        collate_fn=synsurp_collator,
+        collate_fn=supertag_collator,
         num_workers=0,
         pin_memory=True,
     )
@@ -61,7 +61,7 @@ if __name__ == '__main__':
         val_dataset,
         batch_size=args.batch_size,
         shuffle=False,
-        collate_fn=synsurp_collator,
+        collate_fn=supertag_collator,
         num_workers=0,
         pin_memory=True,
     )
