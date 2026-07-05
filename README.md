@@ -1,7 +1,7 @@
 # Syntactic Belief Update as the Driver of Garden Path Processing Difficulty
 
 This repository holds code for the paper [Syntactic Belief Update
-as the Driver of Garden Path Processing Difficulty](https://arxiv.org/).
+as the Driver of Garden Path Processing Difficulty](https://arxiv.org/abs/2606.27206).
 
 ## Setup
 Install dependencies with `pip install -r requirements.txt`
