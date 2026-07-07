@@ -12,7 +12,7 @@ from torch.nn.utils.rnn import pad_sequence
 
 
 from models.parser import Parser
-from models.parser_info_metrics import get_info_metrics, uniform_dist_like, recovered_dist_like
+from models.info_metrics import get_info_metrics, uniform_dist_like, recovered_dist_like
 
 INFO_METRICS_TO_SAVE = [
     'kl_backward',

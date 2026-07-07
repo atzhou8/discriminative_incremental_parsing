@@ -30,11 +30,12 @@ parser.add_argument('-vs', '--val_sentences', default=dev_sentences)
 parser.add_argument('-vt', '--val_tags', default=dev_tags)
 parser.add_argument('--model_name', default='FacebookAI/roberta-large')
 parser.add_argument('--min_word_count', type=int, default=1)
-parser.add_argument('-b', '--batch_size', type=int, default=128)
+parser.add_argument('-b', '--batch_size', type=int, default=16)
 parser.add_argument('-n', '--epochs', type=int, default=100)
 parser.add_argument('-s', '--split_prob', type=float, default=0.8)
+parser.add_argument('-m', '--mask_prob', type=float, default=0.5)
 parser.add_argument('-lr', '--learning_rate', type=float, default=1e-5)
-parser.add_argument('--accumulate_grad_batches', type=int, default=1)
+parser.add_argument('--accumulate_grad_batches', type=int, default=16)
 parser.add_argument('-v', '--version_number', type=int, default=None)
 
 if __name__ == '__main__':
@@ -72,6 +73,7 @@ if __name__ == '__main__':
         ccg_tagset=ccg_tags,
         learning_rate=args.learning_rate,
         split_prob=args.split_prob,
+        mask_prob=args.split_prob
     )
     logger = TensorBoardLogger(
         save_dir='lightning_logs',

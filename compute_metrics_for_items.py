@@ -12,7 +12,8 @@ from torch.nn.utils.rnn import pad_sequence
 
 
 from models.parser import Parser
-from models.parser_info_metrics import get_info_metrics, uniform_dist_like, recovered_dist_like
+from models.lc_crf_tagger import LinearChainCRFSuperTagger
+from models.info_metrics import get_info_metrics, uniform_dist_like, recovered_dist_like
 
 INFO_METRICS_TO_SAVE = [
     'kl_backward',
@@ -214,16 +215,22 @@ def add_info_metrics_all(
                 end = min(start + batch_size, num_rows)
                 batch_indices = list(range(start, end))
                 batch = get_batch_from_word_rows(word_rows, batch_indices, device)
-                dist_before, _, before_sentences, _ = model.forward(
+                
+                is_adjunct = None
+                out_before = model.forward(
                     sentences=[s.copy() for s in batch['sentences']],
                     lengths=batch['lengths'],
-                    cutoffs=batch['cutoffs']-1,
+                    cutoffs=batch['cutoffs'],
+                    mask=True
                 )
-                dist_after, _, after_sentences, is_adjunct = model.forward(
+                dist_before, before_sentences = out_before['crf'], out_before['cut_sentences'] 
+                out_after = model.forward(
                     sentences=[s.copy() for s in batch['sentences']],
                     lengths=batch['lengths'],
                     cutoffs=batch['cutoffs'],
                 )
+                dist_after, after_sentences = out_after['crf'], out_after['cut_sentences'] 
+
                 metrics = get_info_metrics(dist_before, dist_after)
                 if is_adjunct is not None:
                     is_adjunct = torch.sigmoid(is_adjunct).squeeze(-1).cpu().numpy().tolist()
@@ -256,16 +263,22 @@ def add_info_metrics_all(
                 end = min(start + batch_size, len(amb_indices))
                 batch_indices = amb_indices[start:end]
                 batch = get_batch_from_word_rows(word_rows, batch_indices, device)
-                dist_before, _, before_sentences, _ = model.forward(
+                
+                is_adjunct = None
+                out_before = model.forward(
                     sentences=[s.copy() for s in batch['sentences']],
                     lengths=batch['lengths'],
-                    cutoffs=batch['cutoffs']-1,
+                    cutoffs=batch['cutoffs'],
+                    mask=True
                 )
-                dist_after, _, after_sentences, is_adjunct = model.forward(
+                dist_before, before_sentences = out_before['crf'], out_before['cut_sentences'] 
+                out_after = model.forward(
                     sentences=[s.copy() for s in batch['sentences']],
                     lengths=batch['lengths'],
                     cutoffs=batch['cutoffs'],
                 )
+                dist_after, after_sentences = out_after['crf'], out_after['cut_sentences'] 
+
                 dist_gold = recovered_dist_like(
                     dist=dist_after,
                     gold_trees=batch['gold_trees'],
@@ -303,16 +316,22 @@ def add_info_metrics_all(
                 end = min(start + batch_size, len(unamb_indices))
                 batch_indices = unamb_indices[start:end]
                 batch = get_batch_from_word_rows(word_rows, batch_indices, device)
-                dist_before, _, before_sentences, _ = model.forward(
+            
+                is_adjunct = None
+                out_before = model.forward(
                     sentences=[s.copy() for s in batch['sentences']],
                     lengths=batch['lengths'],
-                    cutoffs=batch['cutoffs']-1,
+                    cutoffs=batch['cutoffs'],
+                    mask=True
                 )
-                dist_after, _, after_sentences, is_adjunct = model.forward(
+                dist_before, before_sentences = out_before['crf'], out_before['cut_sentences'] 
+                out_after = model.forward(
                     sentences=[s.copy() for s in batch['sentences']],
                     lengths=batch['lengths'],
                     cutoffs=batch['cutoffs'],
                 )
+                dist_after, after_sentences = out_after['crf'], out_after['cut_sentences'] 
+                
                 if is_adjunct is not None:
                     is_adjunct = torch.sigmoid(is_adjunct).squeeze(-1).cpu().numpy().tolist()
                 else:
@@ -368,6 +387,7 @@ if __name__ == '__main__':
     parser.add_argument('-ga', '--gold_trees_amb', default=None)
     parser.add_argument('-gu', '--gold_trees_unamb', default=None)
     parser.add_argument('--ckpt', default='last', choices=['val', 'cutoff', 'last'])
+    parser.add_argument('-m', '--model_type', default='parser', choices=['parser', 'tagger'])
     parser.add_argument('--batch-size', type=int, default=64)
     args = parser.parse_args()
 
@@ -383,7 +403,12 @@ if __name__ == '__main__':
         best_ckpt = next(ckpt_dir.glob(f'best_{args.ckpt}_epoch=*.ckpt'))
 
     print(f'Loading checkpoint from {best_ckpt}')
-    model = Parser.load_from_checkpoint(best_ckpt)
+    if args.model_type == 'parser':
+        model = Parser.load_from_checkpoint(best_ckpt)
+    elif args.model_type == 'tagger':
+        model = LinearChainCRFSuperTagger.load_from_checkpoint(best_ckpt)
+    else:
+        raise TypeError('Unsupported model type')
 
     output_csv = args.output_csv
     df = add_info_metrics_all(

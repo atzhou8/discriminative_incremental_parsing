@@ -2,42 +2,65 @@ import torch
 import numpy as np
 
 from supar.structs.tree import MatrixTree
+from supar.structs.linearchain import LinearChainCRF
+
+def scale_distribution(dist, alpha):
+    if type(dist) is MatrixTree:
+        return MatrixTree(
+            scores=dist.scores*alpha,
+            lens=dist.lens,
+            multiroot=dist.multiroot
+        )
+    elif type(dist) is LinearChainCRF:
+        return LinearChainCRF(
+            scores=dist.scores*alpha,
+            trans=dist.trans*alpha,
+            lens=dist.lens
+        )
+    else:
+        raise TypeError('Unsupported structure')
+
+def mix_distribution(dist_a, dist_b, coef_a, coef_b):
+    assert type(dist_a) == type(dist_b)
+    if type(dist_a) is MatrixTree:
+        return MatrixTree(
+            scores=coef_a*dist_a.scores + coef_b*dist_b.scores,
+            lens=dist_a.lens,
+            multiroot=dist_a.multiroot
+        )
+    elif type(dist_a) is LinearChainCRF:
+        return LinearChainCRF(
+            scores=coef_a*dist_a.scores + coef_b*dist_b.scores,
+            trans=coef_a*dist_a.trans + coef_b*dist_b.trans,
+            lens=dist_a.lens
+        )
+    else:
+        raise TypeError('Unsupported structure')
 
 def renyi_entropy(dist, alpha):
-    lp = dist.log_partition.detach().cpu().numpy()
-    alpha_lp = MatrixTree(
-        dist.scores * alpha,
-        dist.lens,
-        dist.multiroot
-    ).log_partition.detach().cpu().numpy()  # type: ignore
+    lp = dist.log_partition
+    alpha_dist = scale_distribution(dist, alpha) 
+    alpha_lp = alpha_dist.log_partition
 
     return (alpha_lp - alpha * lp) /(1-alpha)
 
 def renyi_divergence(dist_before, dist_after, alpha):
     lp_before = dist_before.log_partition
     lp_after = dist_after.log_partition
-    lp_mixed = MatrixTree(
-        alpha * dist_before.scores + (1 - alpha) * dist_after.scores,
-        dist_before.lens,
-        multiroot=dist_before.multiroot
-    ).log_partition
+    mixed = mix_distribution(dist_before, dist_after, alpha, 1-alpha)
+    lp_mixed = mixed.log_partition
 
     renyi_divergence = (lp_mixed - alpha*lp_before - (1-alpha)*lp_after) / (alpha-1)
-
     return renyi_divergence.detach().cpu().numpy()
 
 def renyi_cross_entropy(dist_before, dist_after, alpha):
     lp_before = dist_before.log_partition
     lp_after = dist_after.log_partition
-    lp_mixed = MatrixTree(
-        dist_before.scores + (alpha - 1) * dist_after.scores,
-        dist_before.lens,
-        multiroot=dist_before.multiroot
-    ).log_partition
+    mixed = mix_distribution(dist_before, dist_after, 1, alpha-1)
+    lp_mixed = mixed.log_partition
 
-    renyi_divergence = lp_after + (lp_mixed - lp_before) / (1-alpha)
-
-    return renyi_divergence.detach().cpu().numpy()
+    renyi_xent = lp_after + (lp_mixed - lp_before) / (1-alpha)
+    return renyi_xent.detach().cpu().numpy()
 
 def uniform_dist_like(dist):
     return MatrixTree(
@@ -62,15 +85,6 @@ def recovered_dist_like(dist, gold_trees, cutoffs, temp=5):
             if head <= batch_cutoff and dep <= batch_cutoff:
                 scores[batch_idx, dep, head] = float(temp)
 
-    return MatrixTree(
-        scores=scores,
-        lens=dist.lens,
-        multiroot=dist.multiroot
-    )
-
-def weighted_root_dist_like(dist, scale_factor=5):
-    scores = dist.scores.clone()
-    scores[:, :, 0] *= scale_factor # b * d * h
     return MatrixTree(
         scores=scores,
         lens=dist.lens,
@@ -107,11 +121,7 @@ def get_info_metrics(dist_before, dist_after):
     metrics['kl_forward'] = dist_before.kl(dist_after).detach().cpu().numpy()
     metrics['kl_backward'] = dist_after.kl(dist_before).detach().cpu().numpy()
     metrics['kl_symmetric'] = 0.5 * (metrics['kl_forward'] + metrics['kl_backward'])
-    dist_mix = MatrixTree(
-        scores=dist_before.scores + dist_after.scores,
-        lens=dist_before.lens,
-        multiroot=dist_before.multiroot
-    )
+    dist_mix = mix_distribution(dist_before, dist_after, 1, 1)
     js_geo = 0.5 * (dist_before.kl(dist_mix) + dist_after.kl(dist_mix))
     metrics['js_geo'] = js_geo.detach().cpu().numpy()
 

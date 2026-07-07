@@ -282,11 +282,17 @@ class Parser(pl.LightningModule):
             lens=lengths-1, # -1 to ignore root 
             multiroot=self.multiroot
         )
-        return mt, clamp_diff, cut_sentences, is_adjunct
+
+        return {
+            'crf': mt,
+            'clamp_diff': clamp_diff,
+            'cut_sentences': cut_sentences,
+            'is_adjunct': is_adjunct
+        }
     
     def predict(self, sentences, lengths):
         with torch.no_grad():
-            mt, _, _, _ = self.forward(sentences, lengths)
+            mt = self.forward(sentences, lengths)['crf']
         return self._predict(mt, lengths,)
 
     def _predict(self, mt, lengths):
@@ -378,14 +384,16 @@ class Parser(pl.LightningModule):
             cutoffs = torch.randint(1, lengths.max().item(), size=(batch_size,), device=self.device)
             cutoffs = torch.minimum(cutoffs % (lengths - 4) + 4, lengths - 2)
         else:
-            cutoffs = None      
+            cutoffs = None
 
-        mt, clamp_diff, _, is_adjunct = self.forward(
+        out = self.forward(
             sentences, 
             lengths, 
             clamp=True, 
             cutoffs=cutoffs
         )
+        mt, clamp_diff, is_adjunct = out['crf'], out['clamp_diff'], out['is_adjunct']
+
         adjunct_loss = 0
         adjunct_acc = None
         if self.predict_adjunct and gold_adjuncts is not None \
@@ -456,7 +464,12 @@ class Parser(pl.LightningModule):
         batch_size = lengths.shape[0]
 
         # full-context metrics
-        mt, clamp_diff, _, _ = self.forward(sentences, lengths, clamp=True)
+        out = self.forward(
+            sentences, 
+            lengths, 
+            clamp=True, 
+        )
+        mt, clamp_diff = out['crf'], out['clamp_diff']
         loss, _, probs, entropy = self._loss(mt, gold_trees, clamp_diff)
         y_pred = self._predict(mt, lengths)
         tree_acc, node_acc, _ = self._accuracy(gold_trees, y_pred, lengths)
@@ -473,12 +486,13 @@ class Parser(pl.LightningModule):
         cutoffs = torch.randint(1, lengths.max().item(), size=(batch_size,), device=self.device)
         cutoffs = torch.minimum(cutoffs % (lengths - 4) + 4, lengths - 2)
 
-        mt, clamp_diff, _, is_adjunct = self.forward(
+        out = self.forward(
             sentences, 
             lengths, 
-            cutoffs=cutoffs, 
-            clamp=True
+            clamp=True, 
+            cutoffs=cutoffs
         )
+        mt, clamp_diff, is_adjunct = out['crf'], out['clamp_diff'], out['is_adjunct']
         loss, _, probs, entropy = self._loss(mt, gold_trees, clamp_diff)
         y_pred = self._predict(mt, lengths)
         tree_acc, node_acc, _ = self._accuracy(gold_trees, y_pred, lengths)
@@ -531,12 +545,13 @@ class Parser(pl.LightningModule):
             else:
                 cutoffs = raw_cutoffs.to(self.device)
 
-            mt, clamp_diff, cut_sentences, _ = self.forward(
+            out = self.forward(
                 sentences, 
                 lengths, 
                 clamp=True, 
-                cutoffs=cutoffs,
+                cutoffs=cutoffs
             )
+            mt, clamp_diff, cut_sentences = out['crf'], out['clamp_diff'], out['cut_sentences']
             y_pred = self._predict(mt, lengths)
             if gold_trees is not None:
                 # compute loss/metrics
