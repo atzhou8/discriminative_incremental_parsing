@@ -59,13 +59,13 @@ python compute_metrics_for_sentences.py -n NAME -i sentences.txt -o output.csv
     -n synsurp/silver \
     -v 0 \
     -i data/phenomena/SAP/items/items_ClassicGP.pivot.csv \
-    -o out/parser/items_ClassicGP.synsurp.csv
+    -o out/synsurp/items_ClassicGP.synsurp.csv
 
     python compute_synsurp_for_items.py \
     -n synsurp/silver \
     -v 0 \
     -i data/phenomena/SAP/items/items_filler.pivot.csv \
-    -o out/parser/items_filler.synsurp.csv
+    -o out/synsurp/items_filler.synsurp.csv
     ```
 3. Compute causal RoBERTa surprisal metrics:
     ```
@@ -85,8 +85,8 @@ cd into the `r_analyses` directory to run statistical analyses
 1. Prepare metrics for R analyses
     ```
     cd r_analyses
-    python get_mergedRT.py predictors/ClassicGardenPathSet.csv predictors/ClassicGardenPathSet_merged.csv
-    python get_mergedRT.py predictors/Fillers.csv predictors/Fillers_merged.csv
+    python get_mergedRT.py items/ClassicGardenPathSet.csv items/ClassicGardenPathSet_merged.csv
+    python get_mergedRT.py items/Fillers.csv items/Fillers_merged.csv
     python combine_predictors.py
     ```
 2. Fit linear mixed effects models for predicting reading times
