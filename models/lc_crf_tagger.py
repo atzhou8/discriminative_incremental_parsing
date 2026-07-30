@@ -21,12 +21,14 @@ class LinearChainCRFSuperTagger(pl.LightningModule):
         super().__init__()
         self.tokenizer = RobertaTokenizerFast.from_pretrained(
             model_name, 
-            add_prefix_space=True
+            add_prefix_space=True,
+            local_files_only=True,
         )
         self.model = RobertaModel.from_pretrained(
             model_name,
             use_safetensors=True,
             trust_remote_code=False,
+            local_files_only=True,
         )
         self.model.gradient_checkpointing_enable()
         self.model.config.use_cache = False

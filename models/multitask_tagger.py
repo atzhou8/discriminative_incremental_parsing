@@ -18,15 +18,17 @@ class SynSurpRoBERTa(pl.LightningModule):
         # roberta model
         self.tokenizer = RobertaTokenizerFast.from_pretrained(
             model_name,
-            add_prefix_space=True
+            add_prefix_space=True,
+            local_files_only=True,
         )
-        config = AutoConfig.from_pretrained(model_name)
+        config = AutoConfig.from_pretrained(model_name, local_files_only=True)
         config.is_decoder = True
         self.causal_roberta = RobertaForCausalLM.from_pretrained(
             model_name,
             use_safetensors=True,
             trust_remote_code=False,
-            config=config
+            config=config,
+            local_files_only=True,
         ).roberta
         self.causal_roberta.train(True)
 

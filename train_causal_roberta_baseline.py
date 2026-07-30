@@ -47,15 +47,19 @@ class LMTreebankDataset(TreebankDataset):
 if __name__ == '__main__':
     args = parser.parse_args()
 
-    tokenizer = RobertaTokenizer.from_pretrained(args.model_name)
+    tokenizer = RobertaTokenizer.from_pretrained(
+        args.model_name,
+        local_files_only=True,
+    )
 
-    config = AutoConfig.from_pretrained(args.model_name)
+    config = AutoConfig.from_pretrained(args.model_name, local_files_only=True)
     config.is_decoder = True
     model = RobertaForCausalLM.from_pretrained(
         args.model_name,
         use_safetensors=True,
         trust_remote_code=False,
-        config=config
+        config=config,
+        local_files_only=True,
     )
 
     dataset = LMTreebankDataset(args.train_dir, tokenizer=tokenizer)

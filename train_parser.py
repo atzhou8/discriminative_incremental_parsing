@@ -21,11 +21,12 @@ ROOT = Path(__file__).resolve().parent
 en_train = ROOT / 'data' / 'treebanks' / 'UD_English-GUM' / 'en_gum-ud-train-inc.conllu'
 en_test = ROOT / 'data' / 'treebanks' / 'UD_English-GUM' / 'en_gum-ud-test.conllu'
 en_dev = ROOT / 'data' / 'treebanks' / 'UD_English-GUM' / 'en_gum-ud-dev.conllu'
-en_llm = 'FacebookAI/roberta_large'
+en_llm = 'FacebookAI/roberta-large'
 
 
 parser = argparse.ArgumentParser()
 parser.add_argument('name')
+parser.add_argument('-v', '--version_number', type=int, default=None)
 parser.add_argument('-train', '--train_dir',
                     default=en_train)
 parser.add_argument('-val', '--val_dir',
@@ -33,19 +34,20 @@ parser.add_argument('-val', '--val_dir',
 parser.add_argument('-e', '--embedding_model',
                     default=en_llm)
 parser.add_argument('-mr', '--multiroot', action='store_true')
-parser.add_argument('-l', '--llm_layer', type=int, default=7)
+parser.add_argument('-a', '--anchor', action='store_true')
+parser.add_argument('-p', '--pad', default='length')
+parser.add_argument('-l', '--llm_layer', type=int, default=-1)
 parser.add_argument('-dim', '--embedding_dim', type=int, default=512)
 parser.add_argument('-lr', '--learning_rate', type=float, default=1e-4)
 parser.add_argument('-c', '--clamp', type=int, default=25)
 parser.add_argument('--mlp_drop', type=float, default=0.0)
 parser.add_argument('--emb_drop', type=float, default=0.0)
-parser.add_argument('-v', '--version_number', type=int, default=None)
+parser.add_argument('-er', '--entropy_reg', type=float, default=0)
+parser.add_argument('-s', '--split_prob', type=float, default=0.9)
+parser.add_argument('-m', '--mask_prob', type=float, default=0.5)
 parser.add_argument('-b', '--batch_size', type=int, default=128)
 parser.add_argument('-n', '--epochs', type=int, default=200)
-parser.add_argument('-p', '--patience', type=int, default=50)
-parser.add_argument('-er', '--entropy_reg', type=float, default=0)
-parser.add_argument('-s', '--split_prob', type=float, default=0.3)
-parser.add_argument('-adj', '--predict_adjunct', action='store_true')
+parser.add_argument('-pt', '--patience', type=int, default=50)
 parser.add_argument('--val_every_n', type=int, default=5)
 parser.add_argument('--local_steps', type=int, default=0)
 parser.add_argument('-ga', '--accumulate_grad_batches', type=int, default=1)
@@ -54,9 +56,11 @@ parser.add_argument('-ga', '--accumulate_grad_batches', type=int, default=1)
 if __name__ == '__main__':
     args = parser.parse_args()
 
+    if args.pad != 'length':
+        args.pad = int(args.pad)
+
     model = Parser(
         embedding_model_name=args.embedding_model,
-        incremental=args.multiroot,
         potential_clamp=args.clamp, 
         learning_rate=args.learning_rate,
         mlp_dropout=args.mlp_drop,
@@ -65,6 +69,10 @@ if __name__ == '__main__':
         llm_output_layer=args.llm_layer,
         embedding_dim=args.embedding_dim,
         split_trees_prob=args.split_prob,
+        mask_prob=args.mask_prob,
+        use_anchor=args.anchor,
+        pad=args.pad, # type:ignore
+        multiroot=args.multiroot,
         local_steps=args.local_steps,
     )
 
@@ -97,13 +105,6 @@ if __name__ == '__main__':
                 mode='max',
                 save_top_k=1,
                 filename='best_val_{epoch:02d}',
-                save_last=False,
-            ),
-            ModelCheckpoint(
-                monitor='cutoff val probs',
-                mode='max',
-                save_top_k=1,
-                filename='best_cutoff_{epoch:02d}',
                 save_last=False,
             ),
             ModelCheckpoint(

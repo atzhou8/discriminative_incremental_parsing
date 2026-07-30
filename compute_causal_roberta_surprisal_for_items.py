@@ -84,8 +84,15 @@ if __name__ == '__main__':
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-    tokenizer = RobertaTokenizerFast.from_pretrained(args.model_name_or_path, add_prefix_space=True)
-    model = AutoModelForCausalLM.from_pretrained(args.model_name_or_path)
+    tokenizer = RobertaTokenizerFast.from_pretrained(
+        args.model_name_or_path,
+        add_prefix_space=True,
+        local_files_only=True,
+    )
+    model = AutoModelForCausalLM.from_pretrained(
+        args.model_name_or_path,
+        local_files_only=True,
+    )
     model.to(device) # type: ignore
     model.eval()
 
