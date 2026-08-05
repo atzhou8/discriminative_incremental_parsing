@@ -221,7 +221,7 @@ def add_info_metrics_all(
                     sentences=[s.copy() for s in batch['sentences']],
                     lengths=batch['lengths'],
                     cutoffs=batch['cutoffs'],
-                    mask=True
+                    mask_last=True
                 )
                 dist_before, before_sentences = out_before['crf'], out_before['cut_sentences'] 
                 out_after = model.forward(
@@ -269,7 +269,7 @@ def add_info_metrics_all(
                     sentences=[s.copy() for s in batch['sentences']],
                     lengths=batch['lengths'],
                     cutoffs=batch['cutoffs'],
-                    mask=True
+                    mask_last=True
                 )
                 dist_before, before_sentences = out_before['crf'], out_before['cut_sentences'] 
                 out_after = model.forward(
@@ -322,7 +322,7 @@ def add_info_metrics_all(
                     sentences=[s.copy() for s in batch['sentences']],
                     lengths=batch['lengths'],
                     cutoffs=batch['cutoffs'],
-                    mask=True
+                    mask_last=True
                 )
                 dist_before, before_sentences = out_before['crf'], out_before['cut_sentences'] 
                 out_after = model.forward(
@@ -386,7 +386,7 @@ if __name__ == '__main__':
     parser.add_argument('-o', '--output_csv', default=None)
     parser.add_argument('-ga', '--gold_trees_amb', default=None)
     parser.add_argument('-gu', '--gold_trees_unamb', default=None)
-    parser.add_argument('--ckpt', default='last', choices=['val', 'cutoff', 'last'])
+    parser.add_argument('--ckpt', default='val', choices=['val', 'cutoff', 'last'])
     parser.add_argument('-m', '--model_type', default='parser', choices=['parser', 'tagger'])
     parser.add_argument('--batch-size', type=int, default=64)
     args = parser.parse_args()
