@@ -15,7 +15,6 @@ from models.parser import Parser
 from models.utils import build_loader
 
 torch.set_float32_matmul_precision('medium')
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 ROOT = Path(__file__).resolve().parent
 en_train = ROOT / 'data' / 'treebanks' / 'UD_English-GUM' / 'en_gum-ud-train-inc.conllu'
@@ -94,7 +93,7 @@ if __name__ == '__main__':
     )
 
     trainer = Trainer(
-        accelerator='gpu' if device.type == 'cuda' else 'cpu',
+        accelerator='auto',
         max_epochs=args.epochs,
         check_val_every_n_epoch=args.val_every_n,
         logger=logger,

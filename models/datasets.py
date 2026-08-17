@@ -72,14 +72,13 @@ class PhenomenaDataset(Dataset):
             self, 
             data_dir,
             condition_col='condition',
-            pos_col='critical_pos',
-            sentence_col='sentence',
+            sentence_col='Sentence',
     ):
         super(PhenomenaDataset, self).__init__()
         df = pd.read_csv(data_dir)
-        self.conditions = df['condition'].tolist()
-        self.cutoffs = df['critical_pos'].tolist()
-        self.sentences = df['sentence'].tolist()
+        self.conditions = df[condition_col].tolist()
+        self.sentences = df[sentence_col].tolist()
+        self.cutoffs = [0 for _ in self.sentences]
 
     def __len__(self):
         return len(self.sentences)

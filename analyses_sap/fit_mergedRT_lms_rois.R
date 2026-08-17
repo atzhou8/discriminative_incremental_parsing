@@ -9,20 +9,24 @@ source('./util.R')
 
 metrics_to_fit <- c(
  'kl_backward',
- 'renyi_divergence_backward_2',
- 'renyi_divergence_backward_3',
- 'renyi_divergence_backward_4',
- 'renyi_divergence_backward_5',
- 'renyi_divergence_backward_6',
- 'cross_entropy_backward',
- 'renyi_crossent_backward_2',
- 'renyi_crossent_backward_3',
- 'renyi_crossent_backward_4',
- 'renyi_crossent_backward_5',
- 'roberta_surp',
- 'gpt2_surp',
- 'synsurp',
- 'ccg_kl'
+ 'supertag_kl',
+ 'RI',
+ 'exp_kl',
+ 'quad_kl'
+#  'renyi_divergence_backward_2',
+#  'renyi_divergence_backward_3',
+#  'renyi_divergence_backward_4',
+#  'renyi_divergence_backward_5',
+#  'renyi_divergence_backward_6',
+#  'cross_entropy_backward',
+#  'renyi_crossent_backward_2',
+#  'renyi_crossent_backward_3',
+#  'renyi_crossent_backward_4',
+#  'renyi_crossent_backward_5',/
+#  'roberta_surp',/
+#  'gpt2_surp',
+#  'synsurp',
+#  'ccg_kl'
 )
 
 cols_to_expand <- c(
@@ -32,7 +36,7 @@ cols_to_expand <- c(
 )
 
 # Load metrics and scale according to ROIs or full dataset
-metrics_gp = read.csv('./predictors/all_predictors.ClassicGP_merged.csv')
+metrics_gp = read.csv('./predictors/all_predictors.ClassicGP.csv')
 metrics_gp <- add_per_word_cols(metrics_gp, col_names = cols_to_expand)
 metrics_roi = subset(
   metrics_gp, word_pos == ifelse(ambiguity == 'ambiguous', disambPositionAmb, disambPositionUnamb)
@@ -51,7 +55,7 @@ scale_params_roi <- get_scale_params(metrics_roi, cols_to_scale)
 metrics_roi <- apply_scale_params(metrics_roi, scale_params_roi)
 print('Applied ROI-only scaling to ROI dataset.')
 
-write.csv(metrics_roi, 'results/rt_models/mergedRT/roi/metrics.csv', row.names=FALSE)
+write.csv(metrics_roi, 'results/rt_models/new_roi/metrics.csv', row.names=FALSE)
 print('Wrote scaled ROI dataset.')
 
 
@@ -86,5 +90,5 @@ for (metric in metrics_to_fit) {
     REML = FALSE,
     control = lmer_ctrl
   )
-  saveRDS(model, paste0('results/rt_models/mergedRT/roi/eachword/', metric, '.RDS'))
+  saveRDS(model, paste0('results/rt_models/new_roi/', metric, '.RDS'))
 } 

@@ -37,6 +37,7 @@ parser.add_argument('-m', '--mask_prob', type=float, default=0.5)
 parser.add_argument('-lr', '--learning_rate', type=float, default=1e-5)
 parser.add_argument('--accumulate_grad_batches', type=int, default=16)
 parser.add_argument('-v', '--version_number', type=int, default=None)
+parser.add_argument('-p', '--pad', type=int, default=0)
 
 if __name__ == '__main__':
     args = parser.parse_args()
@@ -73,7 +74,8 @@ if __name__ == '__main__':
         ccg_tagset=ccg_tags,
         learning_rate=args.learning_rate,
         split_prob=args.split_prob,
-        mask_prob=args.split_prob
+        mask_prob=args.split_prob,
+        pad=args.pad
     )
     logger = TensorBoardLogger(
         save_dir='lightning_logs',

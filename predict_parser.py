@@ -39,6 +39,7 @@ if __name__ == "__main__":
     parser.add_argument('-v', '--version', type=int, required=True)
     parser.add_argument('-i', '--input_dir', required=True)
     parser.add_argument('-o', '--output_dir', default=None)
+    parser.add_argument('-m', '--mask_last', action='store_true')
     parser.add_argument('--ckpt', default='val')
     parser.add_argument(
         '-d',
@@ -51,7 +52,6 @@ if __name__ == "__main__":
         '--cutoff_transform',
         default='none',
     )
-
     parser.add_argument("--batch-size", type=int, default=72)
     args = parser.parse_args()
     assert args.ckpt in ['val', 'cutoff', 'last']
@@ -86,7 +86,7 @@ if __name__ == "__main__":
     else:
         output_dir = args.output_dir
 
-
     model.set_prediction_save_path(output_dir)
+    model.set_test_mask_last = args.mask_last
     trainer = Trainer(accelerator="auto", logger=logger, inference_mode=False)
     trainer.test(model=model, dataloaders=test_loader)

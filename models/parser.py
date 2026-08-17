@@ -73,14 +73,17 @@ class EmbeddingModel(torch.nn.Module):
         for i, sentence in enumerate(sentences):
             if cutoffs is not None:
                 cutoff = int(cutoffs[i].item())
-                if self.pad == 'length':
-                    num_to_mask = len(sentence) - cutoff
-                else:
-                    num_to_mask = self.pad
+
                 sentence = sentence[:cutoff] 
                 if mask_last:
                     sentence[-1] = '<mask>'
-                sentence += ['<mask>']*num_to_mask
+
+            if self.pad == 'length':
+                num_to_mask = len(sentence) - cutoff
+            else:
+                num_to_mask = self.pad
+            sentence += ['<mask>']*num_to_mask
+
             if self.use_anchor:
                 sentence = ['<anchor>'] + sentence
             
@@ -221,6 +224,7 @@ class Parser(pl.LightningModule):
         # path to save predictions
         self.prediction_savepath = None
         self.layer_to_unfreeze = llm_output_layer
+        self.test_mask_last = True
 
     def forward(
         self, 
@@ -331,7 +335,7 @@ class Parser(pl.LightningModule):
         logits = mt.scores
         log_partition = mt.log_partition
         marginals = mt.marginals
-        mask = torch.arange(num_words, device=self.device)[None, :] < cutoffs[:, None]
+        mask = torch.arange(num_words, device=self.device)[None, :] <= cutoffs[:, None]
         
         logits = logits.view(batch * num_words, num_words)
         targets = gold_trees.view(batch * num_words)
@@ -456,8 +460,7 @@ class Parser(pl.LightningModule):
 
         # Local loss in begininng of training
         if self.global_step < self.local_steps:
-            # TODO: fix cutoffs
-            num_words = cutoffs + self.pad if cutoffs is not None else lengths
+            num_words = cutoffs + self.pad + 1 if cutoffs is not None and self.pad != 'length' else lengths
             loss, clamp_loss, probs, entropy = self._local_loss(
                 mt, 
                 gold_trees, 
@@ -546,26 +549,23 @@ class Parser(pl.LightningModule):
         return loss
     
     def on_test_start(self):
+        super().on_test_start()
         self.embedding_model.eval()
         self.eval()
         self.test_predictions = []
-        self.cutoffs = []
-        self.true_signature = []
-        self.node_acc = self.node_total = self.tree_acc = self.tree_total = self.probs = 0
-        # track sentences (or examples) that were predicted entirely correctly
-        self.correct_examples = []
 
     def set_prediction_save_path(self, dir):
         self.prediction_savepath = dir
 
+    def set_test_mask_last(self, mask_last):
+        self.test_mask_last = mask_last
+
     def test_step(self, batch, batch_idx):
-        #TODO: Fix for new masking
         with torch.enable_grad():
             sentences = batch['sentences']
             gold_trees = batch['gold_trees']
             lengths = batch['lengths']
             raw_cutoffs = batch['cutoffs']
-            gold_trees = gold_trees.to(self.device) if gold_trees is not None else None          
             lengths = lengths.to(self.device)
             if raw_cutoffs is None:
                 cutoffs = [None for _ in range(len(sentences))]
@@ -575,57 +575,17 @@ class Parser(pl.LightningModule):
             out = self.forward(
                 sentences, 
                 lengths, 
-                clamp=True, 
-                cutoffs=cutoffs
+                mask_last=self.test_mask_last,
+                cutoffs=cutoffs,
             )
-            mt, clamp_diff, cut_sentences = out['crf'], out['clamp_diff'], out['cut_sentences']
+            mt, _, cut_sentences = out['crf'], out['clamp_diff'], out['cut_sentences']
             y_pred = self._predict(mt)
-            if gold_trees is not None:
-                # compute loss/metrics
-                loss, _, probs, entropy = self._loss(mt, gold_trees, clamp_diff)
-                lengths = cutoffs + 1 if cutoffs[0] is not None else lengths
-                tree_acc, node_acc, _ = self._accuracy(gold_trees, y_pred, lengths)
-                # compute per-example correctness and record the sentence for correct ones
-                try:
-                    # ensure numpy arrays for comparison
-                    if isinstance(y_pred, np.ndarray):
-                        y_np = y_pred
-                    else:
-                        y_np = y_pred.cpu().numpy()
-                    g_np = gold_trees.cpu().numpy()
-                    lengths_np = lengths.cpu().numpy() # type: ignore
-                    for i in range(y_np.shape[0]):
-                        n = y_np.shape[1]
-                        mask = np.arange(n) < lengths_np[i]
-                        equal_mask = (y_np[i] == g_np[i]) | (~mask)
-                        if equal_mask.all():
-                            # store the (possibly cut) sentence text
-                            self.correct_examples.append(1)
-                        else:
-                            self.correct_examples.append(0)
-                except Exception:
-                    pass
-            else:
-                tree_acc = node_acc = probs = entropy = 0
-
             self.test_predictions.extend(zip(cut_sentences, y_pred.cpu().numpy())) # type: ignore
-            self.cutoffs.extend(cutoffs)
-            self.tree_acc += tree_acc
-            self.tree_total += 1
-            self.node_acc += node_acc
-            self.node_total += 1
-            self.log('test acc', tree_acc)
-            self.log('test uas', node_acc)
-            self.log('test probs', probs)
-            self.log('test entropy', entropy)
 
     def on_test_end(self):
-        tree_acc = self.tree_acc / self.tree_total
-        node_acc = self.node_acc / self.node_total
         # print list of correct test examples
-        stat_string = f'acc={tree_acc:.4f}_uas={node_acc:.4f}'
         if self.prediction_savepath is None:
-            save_path = self.logger.log_dir + f'/predictions_{stat_string}.conllu' # type: ignore
+            self.prediction_save_path = self.logger.log_dir + f'/predictions_{stat_string}.conllu' # type: ignore
         
         tensors_to_conllu(
             [sentence for sentence, _ in self.test_predictions],

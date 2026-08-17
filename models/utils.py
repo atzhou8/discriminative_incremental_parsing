@@ -22,12 +22,9 @@ def get_vocab_from_text(file_name, min_count=1):
 
     return sorted(tags)
 
-def tensors_to_conllu(words, heads, write_path):
+def _tensors_to_conllu(words, heads):
     if type(heads) is torch.Tensor:
         heads = heads.detach().cpu().tolist()
-
-    write_path = Path(write_path)
-    write_path.parent.mkdir(parents=True, exist_ok=True)
 
     batch_size = len(words)
     sentences = []
@@ -44,8 +41,13 @@ def tensors_to_conllu(words, heads, write_path):
         sentences.append(sentence)
 
     doc = Document(sentences)
-    CoNLL.write_doc2conll(doc, write_path)
+    return doc
 
+def tensors_to_conllu(words, heads, write_path):
+    write_path = Path(write_path)
+    write_path.parent.mkdir(parents=True, exist_ok=True)
+    doc = _tensors_to_conllu(words, heads)
+    CoNLL.write_doc2conll(doc, write_path)
     return doc
 
 def build_loader(

@@ -9,19 +9,23 @@ source('./util.R')
 
 metrics_to_fit <- c(
  'kl_backward',
- 'renyi_divergence_backward_2',
- 'renyi_divergence_backward_3',
- 'renyi_divergence_backward_4',
- 'renyi_divergence_backward_5',
- 'renyi_divergence_backward_6',
- 'cross_entropy_backward',
- 'renyi_crossent_backward_2',
- 'renyi_crossent_backward_3',
- 'renyi_crossent_backward_4',
- 'roberta_surp',
- 'gpt2_surp',
- 'synsurp',
- 'ccg_kl'
+ 'RI',
+ 'exp_kl',
+ 'quad_kl'
+#  'renyi_divergence_backward_2',
+#  'renyi_divergence_backward_3',
+#  'renyi_divergence_backward_4',
+#  'renyi_divergence_backward_5',
+#  'renyi_divergence_backward_6',
+#  'cross_entropy_backward',
+#  'renyi_crossent_backward_2',
+#  'renyi_crossent_backward_3',
+#  'renyi_crossent_backward_4',
+#  'renyi_crossent_backward_5',/
+#  'roberta_surp',/
+#  'gpt2_surp',
+#  'synsurp',
+#  'ccg_kl'
 )
 
 cols_to_expand <- c(
@@ -31,10 +35,10 @@ cols_to_expand <- c(
 )
 
 # Load metrics and scale based on combined datasets
-metrics_gp = read.csv('./predictors/all_predictors.ClassicGP_merged.csv')
+metrics_gp = read.csv('./predictors/all_predictors.ClassicGP.csv')
 metrics_gp <- add_per_word_cols(metrics_gp, col_names = cols_to_expand)
 
-metrics_filler = read.csv('./predictors/all_predictors.filler_merged.csv')
+metrics_filler = read.csv('./predictors/all_predictors.filler.csv')
 metrics_filler <- add_per_word_cols(metrics_filler, col_names = cols_to_expand)
 
 metrics_all = bind_rows(metrics_gp, metrics_filler)
@@ -61,7 +65,7 @@ metrics_roi <- apply_scale_params(metrics_roi, scale_params)
 
 print('Applied cross-dataset scaling')
 
-write.csv(metrics_roi, 'results/rt_models/mergedRT/filler/metrics.csv', row.names=FALSE)
+write.csv(metrics_roi, 'results/rt_models/new_filler/metrics.csv', row.names=FALSE)
 print('Wrote cross-scaled dataset.')
 
 
@@ -77,14 +81,19 @@ print(paste('Filler data rows:', nrow(fillers_data)))
 
 # Model fitting
 lmer_ctrl <- lmerControl(optimizer = 'bobyqa', optCtrl = list(maxfun = 200000))
+outlier_sd_threshold <- 3
 
 # Fit RT models...
-metrics_to_fit <- ('roberta_surp')
+# metrics_to_fit <- ('roberta_surp')
 for (metric in metrics_to_fit) {
   print(paste('Fitting each word fillers-only model for', metric))
   metric_w1_s <- paste0(metric, '_w1_s')
   metric_w2_s <- paste0(metric, '_w2_s')
   metric_w3_s <- paste0(metric, '_w3_s')
+  fit_cols <- c(metric_w1_s, metric_w2_s, metric_w3_s)
+  fit_data <- fillers_data %>%
+    filter(if_all(all_of(fit_cols), ~ !is.na(.) & abs(.) <= outlier_sd_threshold))
+  print(paste('Rows kept after outlier filtering:', nrow(fit_data), 'of', nrow(fillers_data)))
   formula <- paste0(
     'RT_merged ~ ', metric_w1_s, ' + ', metric_w2_s, ' + ', metric_w3_s,
     ' + logfreq_w1_s * length_w1_s + logfreq_w2_s * length_w2_s',
@@ -93,9 +102,9 @@ for (metric in metrics_to_fit) {
   )
   model <- lmer(
     as.formula(formula),
-    data=fillers_data,
+    data=fit_data,
     REML = FALSE,
     control = lmer_ctrl
   )
-  saveRDS(model, paste0('results/rt_models/mergedRT/filler/eachword/', metric, '.RDS'))
+  saveRDS(model, paste0('results/rt_models/new_filler/eachword/', metric, '.RDS'))
 } 

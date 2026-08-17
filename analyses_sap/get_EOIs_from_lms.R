@@ -12,21 +12,20 @@ gp.spr <- load_data("ClassicGP")
 print("Loaded ClassicGP data.")
 gp.spr$SZM1 <- ifelse(gp.spr$CONSTRUCTION=="NPS",1,0)
 gp.spr$SZM2 <- ifelse(gp.spr$CONSTRUCTION=="NPZ",1,0)
-roi_metrics = read.csv(file.path('./results/rt_models/mergedRT', 'roi', 'metrics.csv'))
-print(paste('Loaded ROI metrics from', file.path('./results/rt_models/mergedRT', 'roi', 'metrics.csv')))
+roi_metrics = read.csv(file.path('./results/rt_models/', 'new_filler', 'metrics.csv'))
+print(paste('Loaded ROI metrics from', file.path('./results/rt_models/', 'new_filler', 'metrics.csv')))
 
 roi_df <- bind_metrics(gp.spr, roi_metrics)
 dir.create('results/EOIs', recursive=TRUE, showWarnings=FALSE)
-dir.create('results/eoi_models/merged', recursive=TRUE, showWarnings=FALSE)
 
 rds_files <- list.files(
-    file.path('./results/rt_models/mergedRT', 'roi/eachword', ''),
+    file.path('./results/rt_models/', 'new_roi/', ''),
   pattern = '\\.[Rr][Dd][Ss]$',
   full.names = TRUE,
   recursive = TRUE
 )
 rds_files <- sort(rds_files)
-output_path <- 'results/EOIs/lm/roi_EOIs.csv'
+output_path <- 'results/EOIs/lm/filler_EOIs.csv'
 # Collect results in an R data.frame (one row per model x ROI)
 results <- data.frame(
   model = character(),
@@ -56,7 +55,7 @@ model_fit <- try(
        control = lmer_ctrl),
   silent = TRUE
 )
-saveRDS(model_fit, file = file.path('results/lm_eoi_models/mergedRT/roi/empirical.rds'))
+saveRDS(model_fit, file = file.path('results/lm_eoi_models/roi/empirical.rds'))
 message('Saved RDS for empirical')
 
 if (is_nonconverged(model_fit)) {
@@ -101,7 +100,7 @@ for (rds_file in rds_files) {
     nps <- fixef(model_fit)["AMBUAMB"] + fixef(model_fit)["AMBUAMB:SZM1"]
     npz <- fixef(model_fit)["AMBUAMB"] + fixef(model_fit)["AMBUAMB:SZM2"]
     mvrr <- fixef(model_fit)["AMBUAMB"]
-    saveRDS(model_fit, file = file.path('results/lm_eoi_models/mergedRT/roi', paste0(model_name, '.rds')))
+    saveRDS(model_fit, file = file.path('results/lm_eoi_models/roi', paste0(model_name, '.rds')))
     message('Saved RDS for ', model_name)
   }
 

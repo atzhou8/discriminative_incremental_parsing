@@ -17,6 +17,7 @@ class LinearChainCRFSuperTagger(pl.LightningModule):
         learning_rate,
         split_prob,
         mask_prob,
+        pad=0
     ):
         super().__init__()
         self.tokenizer = RobertaTokenizerFast.from_pretrained(
@@ -40,6 +41,7 @@ class LinearChainCRFSuperTagger(pl.LightningModule):
         self.learning_rate = learning_rate
         self.split_prob = split_prob
         self.mask_prob = mask_prob
+        self.pad = pad
 
         # tag prediction head
         self.supertagging_head = torch.nn.Sequential(
@@ -58,12 +60,17 @@ class LinearChainCRFSuperTagger(pl.LightningModule):
         torch.nn.init.xavier_uniform_(self.transitions)
         self.save_hyperparameters()
     
-    def forward(self, sentences, lengths, cutoffs=None, mask=False):
+    def forward(
+        self, 
+        sentences, 
+        lengths, 
+        mask_last=False,
+        cutoffs=None, 
+    ):
         """ Output B x L x |C| of log potentials.
         """
         batch_size = len(sentences)
-        if cutoffs is not None:
-            sentences, lengths = self._split_prefix(sentences, cutoffs, mask)
+        sentences, lengths = self._split_prefix(sentences, cutoffs, mask_last)
 
         tokens = self.tokenizer(
             sentences,
@@ -82,18 +89,9 @@ class LinearChainCRFSuperTagger(pl.LightningModule):
         emissions = self.supertagging_head(word_embeddings)
         crf = LinearChainCRF(emissions, self.transitions, lengths)
 
-        # OLD: trying to use torch_struct
-        # log_potentials (N-1) x C_n+1 x C_n 
-        # log_potential(c_i -> c_j) = score(c_j) + trans(c_i, c_j)
-        # emissions = rearrange(emissions, 'b n c -> b n c 1')
-        # transitions = rearrange(self.tag_transitions, 'curr prev -> 1 1 curr prev')
-        # log_potentials = emissions + transitions
-        # log_potentials[:, 0, :, :] = emissions[:, 0, :, :]
-        # crf = LinearChainCRF(log_potentials, lengths)
         return {
             'crf': crf,
             'cut_sentences': sentences,
-            'is_adjunct': None
         }
     
     def training_step(self, batch, batch_idx):
@@ -113,7 +111,7 @@ class LinearChainCRFSuperTagger(pl.LightningModule):
             sentences=sentences,
             lengths=lengths,
             cutoffs=cutoffs,
-            mask=to_mask
+            mask_last=to_mask
         )['crf']
 
         new_lengths = cutoffs if cutoffs is not None else lengths
@@ -147,7 +145,7 @@ class LinearChainCRFSuperTagger(pl.LightningModule):
             sentences=sentences,
             lengths=lengths,
             cutoffs=cutoffs,
-            mask=to_mask
+            mask_last=to_mask
         )['crf']
 
         new_lengths = cutoffs if cutoffs is not None else lengths
@@ -164,14 +162,18 @@ class LinearChainCRFSuperTagger(pl.LightningModule):
         opt = torch.optim.Adam(self.parameters(), lr=self.learning_rate)
         return opt
 
-    def _split_prefix(self, sentences, cutoffs, mask):
+    def _split_prefix(self, sentences, cutoffs, mask_last):
         cut_sentences = []
-        for i, cutoff in enumerate(cutoffs):
+        for i, sentence in enumerate(sentences):
             sentence = sentences[i]
-            if mask:
-                cut_sentences.append(sentence[:cutoff-1] + ['<mask>'])
-            else:
-                cut_sentences.append(sentence[:cutoff])
+            if cutoffs is not None:
+                cutoff = cutoffs[i]
+                sentence = sentence[:cutoff]
+            if mask_last:
+                sentence[-1] = '<mask>'
+            sentence += ['<mask>']*self.pad
+
+            cut_sentences.append(sentence)
 
         return cut_sentences, cutoffs
 

@@ -59,10 +59,11 @@ add_per_word_cols <- function(df, col_names, offsets = c(0, 1, 2)) {
     offset <- offsets[[i]]
     pos_col <- paste0("word_pos_lookup_", i)
 
-    # Build lookup with Sentence, word_pos, and selected columns
+    # Build lookup with Sentence, word_pos, and selected columns.
+    # Use any_of so missing metric columns won't cause an error.
     lookup_cols <- c("Sentence", "word_pos", col_names)
     lookup <- df %>%
-      select(all_of(lookup_cols)) %>%
+      select(any_of(lookup_cols)) %>%
       distinct()
     
     # Rename word_pos to position lookup column
@@ -92,9 +93,25 @@ add_per_word_cols <- function(df, col_names, offsets = c(0, 1, 2)) {
 get_scale_params <- function(df, cols) {
   params <- list()
   for (col in cols) {
+    if (!(col %in% names(df))) {
+      warning(sprintf("Column '%s' not found in dataframe; skipping scaling for this column.", col))
+      next
+    }
     values <- df[[col]]
+    if (!is.numeric(values)) {
+      warning(sprintf("Column '%s' is not numeric; skipping scaling.", col))
+      next
+    }
     mean_val <- mean(values, na.rm=TRUE)
     sd_val <- sd(values, na.rm=TRUE)
+    if (is.na(mean_val) || is.na(sd_val)) {
+      warning(sprintf("Column '%s' has NA mean or sd; skipping scaling.", col))
+      next
+    }
+    if (sd_val == 0) {
+      warning(sprintf("Column '%s' has zero standard deviation; using sd=1 to avoid division by zero.", col))
+      sd_val <- 1
+    }
     params[[col]] <- list(mean=mean_val, sd=sd_val)
   }
   params
@@ -103,6 +120,10 @@ get_scale_params <- function(df, cols) {
 apply_scale_params <- function(df, params) {
   for (col in names(params)) {
     stats <- params[[col]]
+    if (!(col %in% names(df))) {
+      warning(sprintf("Column '%s' missing from dataframe; skipping scaled column creation.", col))
+      next
+    }
     df[[paste0(col, "_s")]] <- (df[[col]] - stats$mean) / stats$sd
   }
   df
