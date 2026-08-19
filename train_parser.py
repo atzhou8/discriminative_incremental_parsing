@@ -36,17 +36,18 @@ parser.add_argument('-mr', '--multiroot', action='store_true')
 parser.add_argument('-a', '--anchor', action='store_true')
 parser.add_argument('-p', '--pad', default='length')
 parser.add_argument('-l', '--llm_layer', type=int, default=-1)
-parser.add_argument('-dim', '--embedding_dim', type=int, default=512)
+parser.add_argument('-dim', '--embedding_dim', type=int, default=1024)
 parser.add_argument('-lr', '--learning_rate', type=float, default=1e-4)
 parser.add_argument('-c', '--clamp', type=int, default=25)
-parser.add_argument('--mlp_drop', type=float, default=0.0)
-parser.add_argument('--emb_drop', type=float, default=0.0)
+parser.add_argument('--mlp_drop', type=float, default=0.2)
+parser.add_argument('--emb_drop', type=float, default=0.2)
 parser.add_argument('-er', '--entropy_reg', type=float, default=0)
 parser.add_argument('-s', '--split_prob', type=float, default=0.9)
 parser.add_argument('-m', '--mask_prob', type=float, default=0.5)
 parser.add_argument('-b', '--batch_size', type=int, default=128)
 parser.add_argument('-n', '--epochs', type=int, default=200)
 parser.add_argument('-pt', '--patience', type=int, default=50)
+parser.add_argument('-gn', '--global_norm', type=float, default=1e-4)
 parser.add_argument('--val_every_n', type=int, default=5)
 parser.add_argument('--local_steps', type=int, default=0)
 parser.add_argument('-ga', '--accumulate_grad_batches', type=int, default=1)
@@ -70,6 +71,7 @@ if __name__ == '__main__':
         split_trees_prob=args.split_prob,
         mask_prob=args.mask_prob,
         use_anchor=args.anchor,
+        global_norm=args.global_norm,
         pad=args.pad, # type:ignore
         multiroot=args.multiroot,
         local_steps=args.local_steps,

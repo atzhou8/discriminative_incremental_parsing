@@ -71,18 +71,20 @@ class EmbeddingModel(torch.nn.Module):
         # Cutoff sentences for incremental parsing
         cut_sentences = []
         for i, sentence in enumerate(sentences):
+            original_len = len(sentence)
             if cutoffs is not None:
                 cutoff = int(cutoffs[i].item())
-
                 sentence = sentence[:cutoff] 
                 if mask_last:
                     sentence[-1] = '<mask>'
+            else:
+                cutoff = original_len
 
             if self.pad == 'length':
-                num_to_mask = len(sentence) - cutoff
+                num_to_mask = original_len - cutoff
             else:
                 num_to_mask = self.pad
-            sentence += ['<mask>']*num_to_mask
+            sentence = sentence + ['<mask>']*num_to_mask
 
             if self.use_anchor:
                 sentence = ['<anchor>'] + sentence
@@ -100,7 +102,7 @@ class EmbeddingModel(torch.nn.Module):
             return_tensors='pt',
             padding='max_length',
             truncation=True,
-            max_length=max_len
+            max_length=max_len+4
         )
         tokenization.to(self.device)
         # with torch.inference_mode():
@@ -166,6 +168,7 @@ class Parser(pl.LightningModule):
         llm_output_layer,
         split_trees_prob,
         mask_prob, 
+        global_norm=1e-4,
         use_anchor=False,
         pad='length', # pad to sentence length if 'length', else pad (int)
         multiroot=False, 
@@ -214,6 +217,7 @@ class Parser(pl.LightningModule):
         self.mask_prob = mask_prob
         self.split_trees_prob = split_trees_prob
         self.local_steps = local_steps
+        self.global_norm_l = global_norm
         
         self.use_anchor = use_anchor
         self.pad = pad
@@ -343,7 +347,9 @@ class Parser(pl.LightningModule):
 
         local = f.cross_entropy(logits[mask], targets[mask], reduction='mean')
         entropy = (log_partition - (marginals * mt.scores).sum((-1, -2))).mean()
-        loss = local + clamp_diff - self.entropy_reg * entropy
+        global_norm = torch.logsumexp(logits[mask], 1)
+        global_norm = self.global_norm_l * (global_norm**2).mean()
+        loss = local + clamp_diff - self.entropy_reg * entropy + global_norm
         return loss, clamp_diff, local, entropy
 
     def _loss(self, mt, gold_trees, clamp_diff):
@@ -359,6 +365,8 @@ class Parser(pl.LightningModule):
     def add_anchor_to_gold_tree(self, gold_trees):
         """Adjusts gold tree labels to fit with new anchor node by 
         incrementing the head of each node."""
+        gold_trees = gold_trees.clone()
+
         # Increment all non-root nodes
         nonroot_mask = (gold_trees != 0)
         gold_trees[nonroot_mask] = gold_trees[nonroot_mask] + 1
@@ -568,7 +576,7 @@ class Parser(pl.LightningModule):
             raw_cutoffs = batch['cutoffs']
             lengths = lengths.to(self.device)
             if raw_cutoffs is None:
-                cutoffs = [None for _ in range(len(sentences))]
+                cutoffs = None
             else:
                 cutoffs = raw_cutoffs.to(self.device)
 
@@ -585,11 +593,11 @@ class Parser(pl.LightningModule):
     def on_test_end(self):
         # print list of correct test examples
         if self.prediction_savepath is None:
-            self.prediction_save_path = self.logger.log_dir + f'/predictions_{stat_string}.conllu' # type: ignore
+            self.prediction_savepath = self.logger.log_dir + '/predictions.conllu' # type: ignore
         
         tensors_to_conllu(
             [sentence for sentence, _ in self.test_predictions],
             [tree for _, tree in self.test_predictions],
             self.prediction_savepath    
         )
-        self.prediction_savepath = None 
+        self.prediction_savepath = None
