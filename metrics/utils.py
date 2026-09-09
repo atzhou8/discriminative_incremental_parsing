@@ -4,6 +4,7 @@ import re
 
 tokenizer = None
 
+
 def _load_tokenizer():
     global tokenizer
     if tokenizer is None:
@@ -12,6 +13,32 @@ def _load_tokenizer():
             processors='tokenize,mwt',
             use_gpu=torch.cuda.is_available()
         )
+
+def get_prefix_prompts_by_token(sentence):
+    _load_tokenizer()
+    sent = tokenizer(sentence).sentences[0]
+
+    prefixes = []
+    words_so_far = []
+    for tok in sent.tokens:
+        if len(tok.words) == 1: # full word
+            words_so_far.append(tok.words[0].text)
+            hyphen_end = tok.start_char
+            for part in tok.text.split('-')[:-1]: # compound special rule
+                hyphen_end += len(part) + 1
+                prefixes.append((list(words_so_far), sentence[:hyphen_end]))
+            prefixes.append((list(words_so_far), sentence[:tok.end_char]))
+        else: # has tokens
+            surface = tok.text
+            pos = 0
+            for w in tok.words:
+                idx = surface.lower().find(w.text.lower(), pos)
+                end = (idx + len(w.text)) if idx != -1 else pos
+                pos = end
+                words_so_far.append(w.text)
+                prefixes.append((list(words_so_far), sentence[:tok.start_char + end]))
+
+    return prefixes[:-1]
 
 def split_sentence_by_token(text):
     """Tokenization scheme for dependency trees"""
